@@ -21,7 +21,7 @@ import {
 } from "@/lib/rooms/availability"
 import { fetchAttendeeGroups } from "@/lib/rooms/keycloak-groups"
 import { nextWeekdayOnOrAfter } from "@/lib/rooms/recurrence"
-import { placeBooking } from "@/lib/rooms/book"
+import { nextInviteSequence, placeBooking } from "@/lib/rooms/book"
 import { cancelRoomBooking } from "@/lib/rooms/booking-client"
 import { fetchBusySlotsForDates, fetchRooms } from "@/lib/rooms/client"
 import { addDays, taipeiIso, todayInTaipei } from "@/lib/rooms/date"
@@ -125,6 +125,9 @@ export async function getPortalBookingsForDate(
     )
     .eq("date", date)
     .eq("status", "booked")
+    // Online-only meetings reserve no room, so they have nothing to match
+    // against the availability grid this feeds.
+    .not("room", "is", null)
 
   if (error) {
     throw new Error(`讀取 Portal 預約紀錄失敗:${error.message}`)
@@ -132,7 +135,7 @@ export async function getPortalBookingsForDate(
 
   return (data ?? []).map((row) => ({
     id: row.id,
-    room: row.room,
+    room: row.room!,
     date: row.date,
     startTime: row.start_time,
     endTime: row.end_time,
@@ -198,12 +201,15 @@ export async function cancelBooking(bookingId: string): Promise<BookingResult> {
     throw new Error("只能取消自己建立的預約")
   }
 
-  await cancelRoomBooking(booking.external_reservation_id, {
-    room: booking.room,
-    start: taipeiIso(booking.date, booking.start_time),
-    end: taipeiIso(booking.date, booking.end_time),
-    subscriber,
-  })
+  // An online-only meeting reserved nothing, so there's nothing to release.
+  if (booking.external_reservation_id && booking.room) {
+    await cancelRoomBooking(booking.external_reservation_id, {
+      room: booking.room,
+      start: taipeiIso(booking.date, booking.start_time),
+      end: taipeiIso(booking.date, booking.end_time),
+      subscriber,
+    })
+  }
 
   const { error: updateError } = await supabase
     .from("rooms_bookings")
@@ -236,6 +242,10 @@ export async function cancelBooking(bookingId: string): Promise<BookingResult> {
     organizer: { name: user.name, email: user.email ?? "" },
     attendees: (booking.attendees ?? []) as unknown as AttendeeContact[],
     cancelled: true,
+    // Must exceed whatever the last REQUEST used. A booking that picked up a
+    // meeting link has already sent sequence 1, so a hardcoded 1 here would
+    // be ignored and the event would stay in everyone's calendar.
+    sequence: await nextInviteSequence(booking.id),
   })
 
   return sent.ok ? {} : { inviteError: sent.error }

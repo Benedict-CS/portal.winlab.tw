@@ -1555,59 +1555,6 @@ export type Database = {
           },
         ]
       }
-      rooms_recurring_meetings: {
-        Row: {
-          active: boolean
-          anchor_date: string
-          attendees: Json
-          created_at: string
-          created_by: string
-          duration_minutes: number
-          id: string
-          include_advisor: boolean
-          interval_weeks: number
-          start_time: string
-          title: string
-          weekday: number
-        }
-        Insert: {
-          active?: boolean
-          anchor_date: string
-          attendees?: Json
-          created_at?: string
-          created_by: string
-          duration_minutes: number
-          id?: string
-          include_advisor?: boolean
-          interval_weeks?: number
-          start_time: string
-          title: string
-          weekday: number
-        }
-        Update: {
-          active?: boolean
-          anchor_date?: string
-          attendees?: Json
-          created_at?: string
-          created_by?: string
-          duration_minutes?: number
-          id?: string
-          include_advisor?: boolean
-          interval_weeks?: number
-          start_time?: string
-          title?: string
-          weekday?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "rooms_recurring_meetings_created_by_fkey"
-            columns: ["created_by"]
-            isOneToOne: false
-            referencedRelation: "user_profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       rooms_bookings: {
         Row: {
           attendees: Json
@@ -1616,11 +1563,14 @@ export type Database = {
           created_at: string
           date: string
           end_time: string
-          external_reservation_id: string
+          external_reservation_id: string | null
           id: string
+          invite_sequence: number
+          meeting_prefix: string | null
+          online: boolean
           recurring_id: string | null
           requested_by: string
-          room: string
+          room: string | null
           start_time: string
           status: string
           title: string | null
@@ -1632,11 +1582,14 @@ export type Database = {
           created_at?: string
           date: string
           end_time: string
-          external_reservation_id: string
+          external_reservation_id?: string | null
           id?: string
-          recurring_id: string | null
+          invite_sequence?: number
+          meeting_prefix?: string | null
+          online?: boolean
+          recurring_id?: string | null
           requested_by: string
-          room: string
+          room?: string | null
           start_time: string
           status?: string
           title?: string | null
@@ -1648,11 +1601,14 @@ export type Database = {
           created_at?: string
           date?: string
           end_time?: string
-          external_reservation_id?: string
+          external_reservation_id?: string | null
           id?: string
+          invite_sequence?: number
+          meeting_prefix?: string | null
+          online?: boolean
           recurring_id?: string | null
           requested_by?: string
-          room?: string
+          room?: string | null
           start_time?: string
           status?: string
           title?: string | null
@@ -1666,8 +1622,151 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "rooms_bookings_recurring_id_fkey"
+            columns: ["recurring_id"]
+            isOneToOne: false
+            referencedRelation: "rooms_recurring_meetings"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "rooms_bookings_requested_by_fkey"
             columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rooms_meeting_requests: {
+        Row: {
+          booking_id: string | null
+          callback_token_hash: string
+          completed_at: string | null
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          event_id: string | null
+          id: string
+          join_url: string | null
+          kind: string
+          notified_at: string | null
+          options_applied: boolean | null
+          pipeline_id: string | null
+          pipeline_url: string | null
+          request_id: string
+          stage: string | null
+          status: string
+          thread_id: string | null
+          web_link: string | null
+        }
+        Insert: {
+          booking_id?: string | null
+          callback_token_hash: string
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          event_id?: string | null
+          id?: string
+          join_url?: string | null
+          kind?: string
+          notified_at?: string | null
+          options_applied?: boolean | null
+          pipeline_id?: string | null
+          pipeline_url?: string | null
+          request_id: string
+          stage?: string | null
+          status?: string
+          thread_id?: string | null
+          web_link?: string | null
+        }
+        Update: {
+          booking_id?: string | null
+          callback_token_hash?: string
+          completed_at?: string | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          event_id?: string | null
+          id?: string
+          join_url?: string | null
+          kind?: string
+          notified_at?: string | null
+          options_applied?: boolean | null
+          pipeline_id?: string | null
+          pipeline_url?: string | null
+          request_id?: string
+          stage?: string | null
+          status?: string
+          thread_id?: string | null
+          web_link?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rooms_meeting_requests_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "rooms_bookings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rooms_recurring_meetings: {
+        Row: {
+          active: boolean
+          anchor_date: string
+          attendees: Json
+          created_at: string
+          created_by: string
+          duration_minutes: number
+          group_name: string | null
+          id: string
+          include_advisor: boolean
+          interval_weeks: number
+          meeting_prefix: string | null
+          online: boolean
+          start_time: string
+          title: string
+          weekday: number
+        }
+        Insert: {
+          active?: boolean
+          anchor_date: string
+          attendees?: Json
+          created_at?: string
+          created_by: string
+          duration_minutes: number
+          group_name?: string | null
+          id?: string
+          include_advisor?: boolean
+          interval_weeks?: number
+          meeting_prefix?: string | null
+          online?: boolean
+          start_time: string
+          title: string
+          weekday: number
+        }
+        Update: {
+          active?: boolean
+          anchor_date?: string
+          attendees?: Json
+          created_at?: string
+          created_by?: string
+          duration_minutes?: number
+          group_name?: string | null
+          id?: string
+          include_advisor?: boolean
+          interval_weeks?: number
+          meeting_prefix?: string | null
+          online?: boolean
+          start_time?: string
+          title?: string
+          weekday?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rooms_recurring_meetings_created_by_fkey"
+            columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "user_profiles"
             referencedColumns: ["id"]

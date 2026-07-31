@@ -14,7 +14,8 @@ export interface InviteRecipient {
 export interface BookingInviteInput {
   bookingId: string
   title: string
-  room: string
+  /** Null for an online-only meeting. */
+  room: string | null
   date: string
   startTime: string
   endTime: string
@@ -24,6 +25,23 @@ export interface BookingInviteInput {
   organizer: InviteRecipient
   attendees: InviteRecipient[]
   cancelled?: boolean
+  /** Teams join link, once it exists. */
+  joinUrl?: string | null
+  /**
+   * RFC 5545 SEQUENCE. Read from the booking rather than derived, because a
+   * booking can be mailed three times now — invited, updated with the meeting
+   * link, then cancelled — and repeating a sequence makes calendar clients
+   * ignore the later message.
+   */
+  sequence: number
+}
+
+// A re-send carrying the meeting link says so, so it doesn't read as a
+// duplicate invite for something already in the recipient's calendar.
+function subjectPrefix(cancelled: boolean, input: BookingInviteInput): string {
+  if (cancelled) return "會議已取消"
+  if (input.joinUrl && input.sequence > 0) return "會議連結已加入"
+  return "會議邀請"
 }
 
 /**
@@ -53,8 +71,9 @@ export async function sendBookingInvite(
       end: input.end,
       organizer: input.organizer,
       attendees: input.attendees,
-      sequence: cancelled ? 1 : 0,
+      sequence: input.sequence,
       method: cancelled ? "CANCEL" : "REQUEST",
+      joinUrl: cancelled ? null : input.joinUrl,
     })
 
     const html = await render(
@@ -65,6 +84,7 @@ export async function sendBookingInvite(
         organizerName: input.organizer.name,
         attendeeNames: input.attendees.map((a) => a.name),
         cancelled,
+        joinUrl: cancelled ? null : input.joinUrl,
       })
     )
 
@@ -74,7 +94,7 @@ export async function sendBookingInvite(
       // RSVPs go back to whoever made the booking — a real mailbox, unlike
       // the notifications sender.
       replyTo: input.organizer.email,
-      subject: `${cancelled ? "會議已取消" : "會議邀請"}：${input.title}（${when}）`,
+      subject: `${subjectPrefix(cancelled, input)}：${input.title}（${when}）`,
       html,
       attachments: [
         {
