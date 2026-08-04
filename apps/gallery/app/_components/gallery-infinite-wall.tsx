@@ -4,9 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { GalleryGrid } from "@/app/_components/gallery-grid"
+import { cacheGalleryMediaUrls } from "@/app/_components/gallery-service-worker"
 import { fetchGalleryWallPage } from "@/app/actions/wall"
 import type { GalleryHomeFilters } from "@/lib/gallery/home-filters"
 import type { GalleryImage, GalleryMember } from "@/lib/gallery/types"
+import { getGalleryThumbUrl } from "@/lib/gallery/url"
 
 export function GalleryInfiniteWall({
   initialImages,
@@ -49,6 +51,19 @@ export function GalleryInfiniteWall({
     }),
     [filters]
   )
+
+  useEffect(() => {
+    // Wall warm: thumbs only (lightbox warms full-res on open).
+    const urls: string[] = []
+    for (const image of images.slice(0, 48)) {
+      const thumbPath =
+        image.media_type === "video" && image.poster_path
+          ? image.poster_path
+          : image.image_path
+      urls.push(getGalleryThumbUrl(thumbPath))
+    }
+    cacheGalleryMediaUrls(urls)
+  }, [images])
 
   const loadMore = useCallback(async () => {
     if (!hasMore || loadingMore) return
@@ -111,6 +126,7 @@ export function GalleryInfiniteWall({
         hasMore={hasMore}
         loadingMore={loadingMore}
         onLoadMore={loadMore}
+        filters={filters}
       />
       {hasMore && !loadError ? (
         <div ref={sentinelRef} className="h-10" aria-hidden />

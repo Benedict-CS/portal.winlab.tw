@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 
 import type { GalleryHomeFilters } from "@/lib/gallery/home-filters"
+import { findSequenceGaps } from "@/lib/gallery/manage-uploads"
 import {
   EMPTY_REACTION_COUNTS,
   EMPTY_REACTION_NAMES,
@@ -14,7 +15,7 @@ export const GALLERY_PAGE_SIZE = 36
 type ProfileRow = {
   id: string
   name: string | null
-  email: string | null
+  email?: string | null
 }
 
 type CoverRow = {
@@ -43,9 +44,13 @@ function buildNameById(rows: ProfileRow[]): Map<string, string> {
 }
 
 function buildMembers(rows: ProfileRow[]): GalleryMember[] {
-  return rows.filter(
-    (row) => typeof row.name === "string" && row.name.trim().length > 0
-  )
+  return rows
+    .filter((row) => typeof row.name === "string" && row.name.trim().length > 0)
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      email: row.email ?? null,
+    }))
 }
 
 function buildCommentCountByImage(
@@ -80,17 +85,16 @@ async function loadGalleryHomeRange(
     userId
       ? supabase
           .from("user_profiles")
-          .select("id, name, email")
+          .select("id, name")
           .order("name", { ascending: true })
       : Promise.resolve({ data: [] as ProfileRow[], error: null }),
     (() => {
       let query = supabase
-        .from("gallery_images")
+        .from("gallery_wall_covers")
         .select(
           "id, name, image_path, media_type, poster_path, duration_seconds, created_by, created_at, pinned_at, sequence_id, sequence_index",
           { count: "exact" }
         )
-        .or("sequence_id.is.null,sequence_index.eq.0")
 
       if (filters.uploaderId) {
         query = query.eq("created_by", filters.uploaderId)
@@ -201,7 +205,8 @@ async function loadGalleryHomeRange(
       if (profileIds.length > 0) {
         const { data: profileRows, error: profileError } = await supabase
           .from("user_profiles")
-          .select("id, name, email")
+          // anon is column-granted to id/name only (email is authenticated+).
+          .select("id, name")
           .in("id", profileIds)
 
         if (profileError) {
@@ -247,6 +252,7 @@ async function loadGalleryHomeRange(
       typeof image.sequence_index === "number" ? image.sequence_index : null,
     sequence_count: 1,
     sequence_items: [],
+    sequence_missing_indexes: [],
     comments: [],
     comment_count: commentCountByImage.get(image.id) ?? 0,
     uploader_name: image.created_by
@@ -260,8 +266,12 @@ async function loadGalleryHomeRange(
   for (const image of images) {
     if (!image.sequence_id) continue
     const items = sequenceRowsById.get(image.sequence_id) ?? []
-    if (items.length <= 1) continue
+    if (items.length === 0) continue
     image.sequence_count = items.length
+    image.sequence_missing_indexes = findSequenceGaps(
+      items.map((item) => item.sequence_index)
+    ).gaps
+    if (items.length <= 1) continue
     image.sequence_items = items.map((item) => ({
       id: item.id,
       name: item.name,
@@ -269,6 +279,8 @@ async function loadGalleryHomeRange(
       media_type: item.media_type === "video" ? "video" : "image",
       poster_path: item.poster_path ?? null,
       created_at: item.created_at,
+      sequence_index:
+        typeof item.sequence_index === "number" ? item.sequence_index : null,
     }))
   }
 

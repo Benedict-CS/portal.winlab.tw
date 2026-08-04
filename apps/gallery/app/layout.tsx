@@ -10,6 +10,8 @@ import { Toaster } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { GalleryInstallPrompt } from "@/app/_components/gallery-install-prompt"
+import { GalleryOfflineBanner } from "@/app/_components/gallery-offline-banner"
+import { GalleryServiceWorker } from "@/app/_components/gallery-service-worker"
 import { KonamiWinlabLogo } from "@/app/_components/konami-winlab-logo"
 import { ThemeProvider } from "@/components/theme-provider"
 import { getGallerySeasonalThemeId } from "@/lib/gallery/settings"
@@ -88,6 +90,8 @@ export default async function RootLayout({
       >
         <ThemeProvider>
           {children}
+          <GalleryServiceWorker />
+          <GalleryOfflineBanner />
           <GalleryInstallPrompt />
           <KonamiWinlabLogo />
           <Toaster />

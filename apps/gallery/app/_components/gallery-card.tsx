@@ -40,6 +40,7 @@ import { toast } from "sonner"
 
 import { ReactionBar } from "@/app/_components/reaction-bar"
 import { GalleryComments } from "@/app/_components/gallery-comments"
+import { cacheGalleryMediaUrls } from "@/app/_components/gallery-service-worker"
 import { PinWallButton } from "@/app/_components/pin-wall-button"
 import { UploaderFilterLink } from "@/app/_components/uploader-filter-link"
 import { useLightboxGestures } from "@/hooks/use-lightbox-gestures"
@@ -52,6 +53,8 @@ import {
 } from "@/components/gallery-chrome"
 import { setGalleryReaction } from "@/app/actions"
 import { formatUploadedAt } from "@/lib/gallery/format-uploaded-at"
+import { isTypingTarget } from "@/lib/gallery/keyboard"
+import { describeSequenceGaps } from "@/lib/gallery/manage-uploads"
 import { getPolaroidFrame } from "@/lib/gallery/polaroid-frame"
 import { buildGalleryPhotoHref } from "@/lib/gallery/photo-deep-link"
 import { loadLightboxSocial } from "@/lib/gallery/lightbox-social"
@@ -187,9 +190,14 @@ export function GalleryCard({
             media_type: image.media_type,
             poster_path: image.poster_path,
             created_at: image.created_at,
+            sequence_index: image.sequence_index,
           },
         ]
   const isSequence = sequenceMedia.length > 1
+  const sequenceGapLabel = describeSequenceGaps(
+    image.sequence_missing_indexes ?? []
+  )
+  const showSequenceBadge = isSequence || Boolean(sequenceGapLabel)
   const [internalOpen, setInternalOpen] = useState(initialOpen)
   const isDialogOpen = open !== undefined ? open : internalOpen
   const setIsDialogOpen = (next: boolean) => {
@@ -224,6 +232,7 @@ export function GalleryCard({
   const [pinnedAt, setPinnedAt] = useState<string | null>(image.pinned_at)
   const viewerIdRef = useRef(viewerId)
   const isDialogOpenRef = useRef(isDialogOpen)
+  const commentIdsRef = useRef<Set<string>>(new Set())
 
   // Coalesce realtime bursts into a single refresh.
   const refreshTimerRef = useRef<number | null>(null)
@@ -243,6 +252,21 @@ export function GalleryCard({
   useEffect(() => {
     isDialogOpenRef.current = isDialogOpen
   }, [isDialogOpen])
+
+  useEffect(() => {
+    commentIdsRef.current = new Set(comments.map((comment) => comment.id))
+  }, [comments])
+
+  useEffect(() => {
+    if (!isDialogOpen || !mediaUrl) return
+    const urls = [mediaUrl, thumbUrl].filter(Boolean)
+    for (const item of sequenceMedia) {
+      urls.push(mediaUrlFromItem(item), thumbUrlFromItem(item))
+    }
+    cacheGalleryMediaUrls(urls)
+    // sequenceMedia is derived from image; depend on image id + items length.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- avoid looping on new array identity
+  }, [isDialogOpen, mediaUrl, thumbUrl, image.id, image.sequence_items])
 
   useEffect(() => {
     setPinnedAt(image.pinned_at)
@@ -332,6 +356,21 @@ export function GalleryCard({
       scheduleRefreshSocial()
     }
 
+    const onCommentLikeChange = (payload: {
+      new?: { comment_id?: string } | null
+      old?: { comment_id?: string } | null
+    }) => {
+      const commentId = payload.new?.comment_id ?? payload.old?.comment_id
+      if (
+        typeof commentId === "string" &&
+        commentIdsRef.current.size > 0 &&
+        !commentIdsRef.current.has(commentId)
+      ) {
+        return
+      }
+      scheduleRefreshSocial()
+    }
+
     channel
       .on(
         "postgres_changes",
@@ -353,8 +392,7 @@ export function GalleryCard({
         },
         onChange
       )
-      // comment_likes has no image_id column — refresh this lightbox on any
-      // like change (debounced). Cheap while one dialog is open.
+      // comment_likes has no image_id — ignore payloads for other comments.
       .on(
         "postgres_changes",
         {
@@ -362,7 +400,7 @@ export function GalleryCard({
           schema: "public",
           table: "gallery_comment_likes",
         },
-        onChange
+        onCommentLikeChange
       )
       .subscribe()
 
@@ -438,6 +476,8 @@ export function GalleryCard({
     if (!isDialogOpen) return
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
       if (event.key === "ArrowLeft") {
         event.preventDefault()
         goLightboxPrev()
@@ -581,14 +621,16 @@ export function GalleryCard({
                           Pinned
                         </div>
                       ) : null}
-                      {isSequence ? (
+                      {showSequenceBadge ? (
                         <div
                           className={cn(
                             gallerySans(),
                             "absolute top-2.5 right-2.5 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white backdrop-blur-sm"
                           )}
                         >
-                          {image.sequence_count} shots
+                          {sequenceGapLabel
+                            ? `Incomplete · ${image.sequence_count}`
+                            : `${image.sequence_count} shots`}
                         </div>
                       ) : null}
                     </div>
@@ -692,13 +734,19 @@ export function GalleryCard({
                       }
                       controls
                       autoPlay
+                      muted
                       playsInline
                       preload="metadata"
                       className={cn(
                         "gallery-lightbox-image",
                         !mediaLoaded && "opacity-0"
                       )}
-                      onLoadedData={() => setMediaLoaded(true)}
+                      onLoadedData={(event) => {
+                        setMediaLoaded(true)
+                        // Start muted for autoplay policies, then unmute if allowed.
+                        const video = event.currentTarget
+                        video.muted = false
+                      }}
                       onError={() => setLightboxFailed(true)}
                     />
                   ) : (
@@ -756,18 +804,18 @@ export function GalleryCard({
                     mobileDetailsOpen && "gallery-lightbox-aside--expanded"
                   )}
                 >
-                  <button
-                    type="button"
-                    className="gallery-lightbox-aside-toggle md:hidden"
-                    aria-expanded={mobileDetailsOpen}
-                    onClick={() => setMobileDetailsOpen((open) => !open)}
-                  >
+                  <div className="gallery-lightbox-aside-toggle md:hidden">
                     <span
                       aria-hidden
-                      className="mx-auto h-1 w-10 shrink-0 rounded-full bg-border/80"
+                      className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-border/80"
                     />
-                    <span className="flex w-full items-center justify-between gap-3 pt-2">
-                      <span className="min-w-0 text-left">
+                    <div className="flex w-full items-center gap-2 px-4 pt-2 pb-3">
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 bg-transparent text-left"
+                        aria-expanded={mobileDetailsOpen}
+                        onClick={() => setMobileDetailsOpen((open) => !open)}
+                      >
                         <span
                           className={cn(
                             gallerySerif(),
@@ -786,25 +834,36 @@ export function GalleryCard({
                             ? `${wallCommentCount} comment${wallCommentCount === 1 ? "" : "s"}`
                             : "Comments & reactions"}
                         </span>
-                      </span>
+                      </button>
                       {isAdmin ? (
                         <PinWallButton
                           imageId={image.id}
                           pinnedAt={pinnedAt}
                           onPinnedChange={handlePinSuccess}
                           scrollToWallTop
-                          stopPropagation
                           className="shrink-0"
                         />
                       ) : null}
-                      <IconChevronUp
-                        className={cn(
-                          "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-                          mobileDetailsOpen && "rotate-180"
-                        )}
-                      />
-                    </span>
-                  </button>
+                      <button
+                        type="button"
+                        aria-label={
+                          mobileDetailsOpen
+                            ? "Collapse comments"
+                            : "Expand comments"
+                        }
+                        aria-expanded={mobileDetailsOpen}
+                        className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground"
+                        onClick={() => setMobileDetailsOpen((open) => !open)}
+                      >
+                        <IconChevronUp
+                          className={cn(
+                            "h-4 w-4 transition-transform",
+                            mobileDetailsOpen && "rotate-180"
+                          )}
+                        />
+                      </button>
+                    </div>
+                  </div>
                   <div className="gallery-lightbox-aside-header space-y-3 border-b border-border/50 px-4 py-3 sm:px-5">
                     <div className="min-w-0 space-y-0.5">
                       <div className="flex flex-wrap items-center gap-2">
@@ -859,6 +918,7 @@ export function GalleryCard({
                           )}
                         >
                           Shot {activeIndex + 1} of {sequenceMedia.length}
+                          {sequenceGapLabel ? ` · ${sequenceGapLabel}` : ""}
                         </p>
                       ) : null}
                     </div>
@@ -890,6 +950,7 @@ export function GalleryCard({
                       members={members}
                       isAdmin={isAdmin}
                       highlightCommentId={highlightCommentId}
+                      loading={!commentsLoaded}
                     />
                   </div>
                 </aside>
