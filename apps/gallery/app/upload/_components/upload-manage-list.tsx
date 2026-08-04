@@ -41,7 +41,7 @@ import {
   type ManageUploadRow,
 } from "@/lib/gallery/manage-uploads"
 import { resolveWallPhotoId } from "@/lib/gallery/wall-photo-id"
-import { getGalleryImageUrl } from "@/lib/gallery/url"
+import { getGalleryThumbUrl } from "@/lib/gallery/url"
 
 type SelectableItem = {
   id: string
@@ -100,7 +100,7 @@ function UploadListItem({
         />
       ) : null}
       <UploadListThumb
-        src={getGalleryImageUrl(thumbPath)}
+        src={getGalleryThumbUrl(thumbPath, 160)}
         alt={image.name}
         isVideo={isVideo}
       />
@@ -202,7 +202,13 @@ function UploadSequenceGroup({
   const gapLabel = describeSequenceGaps(gapInfo.gaps)
 
   const persistOrder = (nextIds: string[], nextItems: ManageUploadRow[]) => {
-    setItems(nextItems)
+    // Keep client sequence_index dense so Cover / Set cover stay accurate
+    // before the server round-trip finishes.
+    const densified = nextItems.map((item, index) => ({
+      ...item,
+      sequence_index: index,
+    }))
+    setItems(densified)
     startTransition(async () => {
       const result = await updateGallerySequenceOrder(sequenceId, nextIds)
       if (!result.ok) {
@@ -239,7 +245,9 @@ function UploadSequenceGroup({
   const compactSequence = () => {
     if (items.length === 0) return
     const nextIds = items.map((item) => item.id)
+    // Same order, but densified indexes close gaps on the server.
     persistOrder(nextIds, items)
+    toast.message("Compacting sequence slots…")
   }
 
   const {
@@ -301,16 +309,11 @@ function UploadSequenceGroup({
       <p
         className={cn(gallerySans(), "text-xs text-muted-foreground uppercase")}
       >
-        Sequence · {items.length} shots · drag handle to reorder
+        Sequence story · {items.length} shots · drag handle to reorder
       </p>
       {gapLabel ? (
         <div className="flex flex-wrap items-center gap-2">
-          <p
-            className={cn(
-              gallerySans(),
-              "text-xs text-amber-700 dark:text-amber-300"
-            )}
-          >
+          <p className={cn(gallerySans(), "text-xs text-amber-800")}>
             Incomplete · {gapLabel}
           </p>
           <button

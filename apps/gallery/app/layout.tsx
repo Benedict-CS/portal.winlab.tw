@@ -33,7 +33,7 @@ const geistSans = Geist({
 
 export const metadata: Metadata = {
   title: "Gallery — WinLab",
-  description: "Art from NYCU WinLab.",
+  description: "Lab polaroids on a cool slate paper wall — NYCU WinLab.",
   applicationName: "Gallery",
   icons: {
     icon: [
@@ -60,10 +60,8 @@ export const metadata: Metadata = {
 }
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fafafa" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
+  // Gallery is light-only — cool slate paper, never dark chrome.
+  themeColor: "#e4e4e7",
 }
 
 export default async function RootLayout({

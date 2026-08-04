@@ -5,13 +5,13 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Gallery — WinLab",
     short_name: "Gallery",
-    description: "Art from NYCU WinLab.",
+    description: "Lab polaroids on a cool slate paper wall — NYCU WinLab.",
     start_url: "/",
     scope: "/",
     display: "standalone",
     orientation: "portrait",
-    background_color: "#fafafa",
-    theme_color: "#fafafa",
+    background_color: "#e4e4e7",
+    theme_color: "#e4e4e7",
     icons: [
       {
         src: "/icons/icon-192.png",

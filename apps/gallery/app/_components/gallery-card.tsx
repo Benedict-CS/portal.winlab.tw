@@ -40,7 +40,7 @@ import {
 import { useLightboxGestures } from "@/hooks/use-lightbox-gestures"
 import { isTypingTarget } from "@/lib/gallery/keyboard"
 import { describeSequenceGaps } from "@/lib/gallery/manage-uploads"
-import { getPolaroidFrame } from "@/lib/gallery/polaroid-frame"
+import { getPolaroidFrame, getPolaroidTape } from "@/lib/gallery/polaroid-frame"
 import { buildGalleryPhotoHref } from "@/lib/gallery/photo-deep-link"
 import {
   nextSequenceIndex,
@@ -96,6 +96,7 @@ export function GalleryCard({
   const searchParams = useSearchParams()
   const rotation = getRotation(image.id)
   const frame = getPolaroidFrame(image.id)
+  const tape = getPolaroidTape(image.id)
   const sequenceMedia: GallerySequenceItem[] =
     image.sequence_items.length > 0
       ? image.sequence_items
@@ -262,12 +263,32 @@ export function GalleryCard({
       if (event.key === "ArrowRight") {
         event.preventDefault()
         goLightboxNext()
+        return
+      }
+      if (event.key === "i" || event.key === "I") {
+        event.preventDefault()
+        setMobileDetailsOpen((open) => !open)
       }
     }
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [goLightboxNext, goLightboxPrev, isDialogOpen])
+
+  // Prefetch adjacent sequence full-res for snappier story browsing.
+  useEffect(() => {
+    if (!isDialogOpen) return
+    const neighbors = [activeIndex - 1, activeIndex + 1]
+      .map((idx) => sequenceMedia[idx])
+      .filter(Boolean)
+    const urls = neighbors.flatMap((item) => [
+      mediaUrlFromItem(item!),
+      thumbUrlFromItem(item!),
+    ])
+    cacheGalleryMediaUrls(urls)
+    // sequenceMedia identity changes each render; key off length + active shot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment
+  }, [activeIndex, isDialogOpen, image.id, sequenceMedia.length])
 
   const handlePinSuccess = (nextPinnedAt: string | null) => {
     setPinnedAt(nextPinnedAt)
@@ -326,16 +347,25 @@ export function GalleryCard({
           }
         >
           <Dialog open={isDialogOpen} onOpenChange={handleDialogOpenChange}>
-            <div className={galleryPolaroidClass()}>
+            <div
+              className={cn(
+                galleryPolaroidClass(),
+                tape === "tl" &&
+                  "gallery-polaroid-tape gallery-polaroid-tape--tl",
+                tape === "tr" &&
+                  "gallery-polaroid-tape gallery-polaroid-tape--tr",
+                tape === "clip" && "gallery-polaroid-clip"
+              )}
+            >
               <DialogTrigger asChild>
                 <button
                   type="button"
-                  className="block w-full rounded-[2px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  className="block w-full rounded-[1px] text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                 >
                   {thumbFailed ? (
                     <div
                       className={cn(
-                        "flex w-full items-center justify-center bg-muted/80 px-4 text-center text-xs text-muted-foreground",
+                        "mx-2.5 mt-2.5 flex items-center justify-center bg-muted/80 px-4 text-center text-xs text-muted-foreground",
                         frame.aspectClass
                       )}
                     >
@@ -344,7 +374,7 @@ export function GalleryCard({
                   ) : (
                     <div
                       className={cn(
-                        "relative overflow-hidden bg-neutral-100",
+                        "relative mx-2.5 mt-2.5 overflow-hidden bg-neutral-200/80 shadow-[inset_0_0_0_1px_rgba(24,24,27,0.06)]",
                         frame.aspectClass
                       )}
                     >
@@ -353,7 +383,7 @@ export function GalleryCard({
                         alt={activeItem?.name ?? image.name}
                         fill
                         priority={priorityLcp}
-                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                        sizes="(max-width: 640px) 92vw, (max-width: 1024px) 44vw, 28vw"
                         className="object-cover"
                         onError={() => setThumbFailed(true)}
                       />
@@ -362,7 +392,7 @@ export function GalleryCard({
                         <div
                           className={cn(
                             gallerySans(),
-                            "absolute top-2.5 left-2.5 inline-flex items-center gap-0.5 rounded-full bg-amber-500/90 px-2 py-0.5 text-[10px] font-medium text-white shadow-sm backdrop-blur-sm"
+                            "absolute top-2.5 left-2.5 inline-flex items-center gap-0.5 rounded-md bg-amber-500/90 px-2 py-0.5 text-[10px] font-medium text-white shadow-sm backdrop-blur-sm"
                           )}
                         >
                           <IconPin className="size-3" aria-hidden />
@@ -373,7 +403,7 @@ export function GalleryCard({
                         <div
                           className={cn(
                             gallerySans(),
-                            "absolute top-2.5 right-2.5 rounded-full bg-black/60 px-2 py-0.5 text-[10px] text-white backdrop-blur-sm"
+                            "absolute top-2.5 right-2.5 rounded-md bg-black/60 px-2 py-0.5 text-[10px] text-white backdrop-blur-sm"
                           )}
                         >
                           {sequenceGapLabel
@@ -383,11 +413,11 @@ export function GalleryCard({
                       ) : null}
                     </div>
                   )}
-                  <div className="gallery-polaroid-caption px-3 pt-3 pb-4">
+                  <div className="gallery-polaroid-caption px-3 pt-3.5 pb-5">
                     <p
                       className={cn(
                         gallerySerif(),
-                        "truncate text-center text-sm leading-snug text-foreground/85"
+                        "truncate text-center text-[0.95rem] leading-snug text-foreground/90 sm:text-base"
                       )}
                     >
                       {image.name}

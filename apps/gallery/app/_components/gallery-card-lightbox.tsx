@@ -19,7 +19,10 @@ import { ReactionBar } from "@/app/_components/reaction-bar"
 import { GalleryComments } from "@/app/_components/gallery-comments"
 import { PinWallButton } from "@/app/_components/pin-wall-button"
 import { UploaderFilterLink } from "@/app/_components/uploader-filter-link"
-import { posterUrlFromItem } from "@/app/_components/gallery-card-media"
+import {
+  posterUrlFromItem,
+  thumbUrlFromItem,
+} from "@/app/_components/gallery-card-media"
 import { gallerySans, gallerySerif } from "@/components/gallery-chrome"
 import { formatUploadedAt } from "@/lib/gallery/format-uploaded-at"
 import type { GalleryReaction, ReactionCounts } from "@/lib/gallery/reactions"
@@ -122,7 +125,7 @@ export function GalleryLightboxMediaPane({
       {!mediaLoaded && !lightboxFailed ? (
         <div
           aria-hidden
-          className="gallery-lightbox-image animate-pulse bg-muted/80"
+          className="gallery-lightbox-image min-h-[40dvh] w-[min(92vw,28rem)] animate-pulse rounded-sm bg-zinc-700/40 sm:min-h-[50dvh]"
         />
       ) : null}
       {lightboxFailed ? (
@@ -164,7 +167,7 @@ export function GalleryLightboxMediaPane({
         <button
           type="button"
           onClick={goLightboxPrev}
-          className="absolute top-1/2 left-3 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-foreground shadow-lg backdrop-blur-sm transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none"
+          className="absolute top-1/2 left-2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-foreground shadow-lg backdrop-blur-sm transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none sm:left-3 sm:h-10 sm:w-10"
           aria-label="Previous"
         >
           <IconChevronLeft className="h-5 w-5" />
@@ -174,25 +177,37 @@ export function GalleryLightboxMediaPane({
         <button
           type="button"
           onClick={goLightboxNext}
-          className="absolute top-1/2 right-3 z-10 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-foreground shadow-lg backdrop-blur-sm transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none"
+          className="absolute top-1/2 right-2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/85 text-foreground shadow-lg backdrop-blur-sm transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none sm:right-3 sm:h-10 sm:w-10"
           aria-label="Next"
         >
           <IconChevronRight className="h-5 w-5" />
         </button>
       ) : null}
       {isSequence ? (
-        <div className="absolute right-0 bottom-3 left-0 z-10 mx-auto flex w-full max-w-2xl items-center justify-center gap-2 px-4">
+        <div className="absolute right-0 bottom-3 left-0 z-10 mx-auto flex w-full max-w-2xl items-end justify-center gap-1.5 overflow-x-auto px-4 pb-0.5">
           {sequenceMedia.map((item, idx) => (
             <button
               key={item.id}
               type="button"
               onClick={() => setActiveIndex(idx)}
-              className={cn(
-                "h-2.5 w-2.5 rounded-full bg-white/50 transition-colors",
-                idx === activeIndex && "bg-white"
-              )}
               aria-label={`View shot ${idx + 1}`}
-            />
+              aria-current={idx === activeIndex ? "true" : undefined}
+              className={cn(
+                "relative h-11 w-9 shrink-0 overflow-hidden rounded-[2px] border-2 bg-zinc-900/30 shadow-md transition-[transform,opacity]",
+                idx === activeIndex
+                  ? "scale-105 border-white"
+                  : "border-white/35 opacity-75 hover:opacity-100"
+              )}
+            >
+              {/* Tiny strip thumbs — next/image is overkill in lightbox chrome */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={thumbUrlFromItem(item)}
+                alt=""
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
+            </button>
           ))}
         </div>
       ) : null}
@@ -283,9 +298,11 @@ export function GalleryLightboxSocialAside({
                 "mt-0.5 block text-[11px] text-muted-foreground"
               )}
             >
-              {wallCommentCount > 0
-                ? `${wallCommentCount} comment${wallCommentCount === 1 ? "" : "s"}`
-                : "Comments & reactions"}
+              {mobileDetailsOpen
+                ? "Swipe down or tap to hide"
+                : wallCommentCount > 0
+                  ? `${wallCommentCount} comment${wallCommentCount === 1 ? "" : "s"} · tap or swipe up`
+                  : "Comments & reactions · tap or swipe up"}
             </span>
           </button>
           {isAdmin ? (
@@ -300,9 +317,7 @@ export function GalleryLightboxSocialAside({
           <button
             type="button"
             aria-label={
-              mobileDetailsOpen
-                ? "Collapse comments"
-                : "Expand comments"
+              mobileDetailsOpen ? "Collapse comments" : "Expand comments"
             }
             aria-expanded={mobileDetailsOpen}
             className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground"
@@ -317,13 +332,21 @@ export function GalleryLightboxSocialAside({
           </button>
         </div>
       </div>
-      <div className="gallery-lightbox-aside-header space-y-3 border-b border-border/50 px-4 py-3 sm:px-5">
-        <div className="min-w-0 space-y-0.5">
+      <div className="gallery-lightbox-aside-header space-y-4 border-b border-border/45 px-5 py-5 sm:px-6">
+        <p
+          className={cn(
+            gallerySans(),
+            "text-[10px] tracking-[0.22em] text-muted-foreground uppercase"
+          )}
+        >
+          On the wall
+        </p>
+        <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <h2
               className={cn(
                 gallerySerif(),
-                "text-lg leading-snug text-foreground sm:text-xl"
+                "text-2xl leading-none tracking-tight text-foreground sm:text-[1.75rem]"
               )}
             >
               {activeItem?.name ?? image.name}
@@ -332,7 +355,7 @@ export function GalleryLightboxSocialAside({
               <span
                 className={cn(
                   gallerySans(),
-                  "inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+                  "inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-800"
                 )}
               >
                 <IconPin className="size-3" aria-hidden />
