@@ -16,8 +16,12 @@ import {
 import { DialogClose } from "@workspace/ui/components/dialog"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { DownloadSequenceButton } from "@/app/_components/download-sequence-button"
+import { GalleryAddToAlbum } from "@/app/_components/gallery-add-to-album"
 import { ReactionBar } from "@/app/_components/reaction-bar"
 import { GalleryComments } from "@/app/_components/gallery-comments"
+import { GalleryImageTags } from "@/app/_components/gallery-image-tags"
+import { GalleryTitleEditor } from "@/app/_components/gallery-title-editor"
 import { PinWallButton } from "@/app/_components/pin-wall-button"
 import { UploaderFilterLink } from "@/app/_components/uploader-filter-link"
 import {
@@ -33,6 +37,7 @@ import {
   type GalleryReaction,
   type ReactionCounts,
 } from "@/lib/gallery/reactions"
+import type { ArtworkNamePatch } from "@/lib/gallery/rename-artwork"
 import type {
   GalleryComment,
   GalleryImage,
@@ -103,7 +108,9 @@ export function GalleryLightboxMediaPane({
         className={cn(
           "absolute top-[max(env(safe-area-inset-top),0.75rem)] z-20",
           isSignedIn
-            ? "right-[calc(max(env(safe-area-inset-right),0.75rem)+6rem)]"
+            ? isSequence
+              ? "right-[calc(max(env(safe-area-inset-right),0.75rem)+9rem)]"
+              : "right-[calc(max(env(safe-area-inset-right),0.75rem)+6rem)]"
             : "right-[calc(max(env(safe-area-inset-right),0.75rem)+3rem)]",
           "inline-flex h-11 w-11 items-center justify-center rounded-full",
           "bg-white/85 text-foreground shadow-lg backdrop-blur-sm",
@@ -113,6 +120,14 @@ export function GalleryLightboxMediaPane({
       >
         <IconLink className="h-5 w-5" />
       </button>
+      {isSignedIn && isSequence ? (
+        <DownloadSequenceButton
+          variant="icon"
+          items={sequenceMedia}
+          coverName={image.name}
+          className="absolute top-[max(env(safe-area-inset-top),0.75rem)] right-[calc(max(env(safe-area-inset-right),0.75rem)+6rem)] z-20"
+        />
+      ) : null}
       {isSignedIn ? (
         <a
           href={mediaUrl}
@@ -254,8 +269,10 @@ export function GalleryLightboxSocialAside({
   isSequence,
   activeIndex,
   sequenceLength,
+  sequenceMedia,
   isSignedIn,
   isAdmin,
+  isOwner = false,
   viewerId,
   viewerName,
   members,
@@ -271,6 +288,7 @@ export function GalleryLightboxSocialAside({
   onReact,
   comments,
   setComments,
+  onArtworkRenamed,
 }: {
   image: GalleryImage
   activeItem: GallerySequenceItem | undefined
@@ -278,8 +296,10 @@ export function GalleryLightboxSocialAside({
   isSequence: boolean
   activeIndex: number
   sequenceLength: number
+  sequenceMedia: GallerySequenceItem[]
   isSignedIn: boolean
   isAdmin: boolean
+  isOwner?: boolean
   viewerId: string | null
   viewerName: string
   members: GalleryMember[]
@@ -295,6 +315,7 @@ export function GalleryLightboxSocialAside({
   onReact: (reaction: GalleryReaction) => void
   comments: GalleryComment[]
   setComments: Dispatch<SetStateAction<GalleryComment[]>>
+  onArtworkRenamed?: (patches: ArtworkNamePatch[]) => void
 }) {
   const sheetTouchStart = useRef<{ x: number; y: number } | null>(null)
   const reactionPeek = formatReactionSummary(counts)
@@ -410,20 +431,20 @@ export function GalleryLightboxSocialAside({
           On the wall
         </p>
         <div className="gallery-lightbox-aside-title-block min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2
-              className={cn(
-                gallerySerif(),
-                "text-2xl leading-none tracking-tight text-foreground sm:text-[1.75rem]"
-              )}
-            >
-              {activeItem?.name ?? image.name}
-            </h2>
+          <div className="flex flex-wrap items-start gap-2">
+            <GalleryTitleEditor
+              imageId={activeItem?.id ?? image.id}
+              name={activeItem?.name ?? image.name}
+              canEdit={isOwner}
+              variant="lightbox"
+              className="min-w-0 flex-1"
+              onRenamed={onArtworkRenamed}
+            />
             {pinnedAt ? (
               <span
                 className={cn(
                   gallerySans(),
-                  "inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-800"
+                  "mt-1 inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-800"
                 )}
               >
                 <IconPin className="size-3" aria-hidden />
@@ -450,16 +471,32 @@ export function GalleryLightboxSocialAside({
             ) : null}
           </p>
           {isSequence ? (
-            <p
-              className={cn(
-                gallerySans(),
-                "text-[11px] text-muted-foreground/70"
-              )}
-            >
-              Shot {activeIndex + 1} of {sequenceLength}
-            </p>
+            <div className="space-y-1">
+              <p
+                className={cn(
+                  gallerySans(),
+                  "text-[11px] text-muted-foreground/70"
+                )}
+              >
+                Shot {activeIndex + 1} of {sequenceLength}
+              </p>
+              {isSignedIn ? (
+                <DownloadSequenceButton
+                  variant="text"
+                  items={sequenceMedia}
+                  coverName={image.name}
+                  className={gallerySans()}
+                />
+              ) : null}
+            </div>
           ) : null}
         </div>
+        <GalleryImageTags
+          key={activeItem?.id ?? image.id}
+          imageId={activeItem?.id ?? image.id}
+          tags={activeItem?.tags ?? image.tags ?? []}
+          canEdit={isSignedIn}
+        />
         {isAdmin ? (
           <div className="gallery-lightbox-aside-pin flex justify-end">
             <PinWallButton
@@ -469,6 +506,9 @@ export function GalleryLightboxSocialAside({
               scrollToWallTop
             />
           </div>
+        ) : null}
+        {isSignedIn ? (
+          <GalleryAddToAlbum imageId={activeItem?.id ?? image.id} />
         ) : null}
         <ReactionBar
           counts={counts}

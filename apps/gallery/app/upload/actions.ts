@@ -2,13 +2,21 @@
 
 import { revalidatePath } from "next/cache"
 
+import { attachGalleryTagsToImage } from "@/app/actions/tags"
+import { sanitizeClientTakenAt } from "@/lib/gallery/extract-taken-at"
 import { isValidClientObjectPath } from "@/lib/gallery/object-path"
+import {
+  buildSequenceRenamePatches,
+  normalizeArtworkRenameDraft,
+  shouldCascadeSequenceRename,
+} from "@/lib/gallery/rename-artwork"
 import {
   allObjectNamesPresent,
   DEFAULT_VERIFY_PLAN,
   objectNamesFromPaths,
   storageSearchOptions,
 } from "@/lib/gallery/storage-verify"
+import { parseGalleryTagList } from "@/lib/gallery/tags"
 import { createClient } from "@/lib/supabase/server"
 
 export type ActionResult = { ok: true } | { ok: false; error: string }
@@ -24,6 +32,9 @@ export type RegisterMediaInput = {
   durationSeconds?: number | null
   sequenceId?: string | null
   sequenceIndex?: number | null
+  tagNames?: string[]
+  /** ISO capture time from EXIF when known; server falls back to now(). */
+  takenAt?: string | null
 }
 
 /**
@@ -133,6 +144,8 @@ export async function registerGalleryImage(
     }
   }
 
+  const takenAt = sanitizeClientTakenAt(input.takenAt)
+
   const insertPayload: Record<string, unknown> = {
     name: trimmed,
     image_path: input.imagePath,
@@ -145,6 +158,7 @@ export async function registerGalleryImage(
     created_by: userId,
     sequence_id: input.sequenceId ?? null,
     sequence_index: input.sequenceIndex ?? null,
+    ...(takenAt ? { taken_at: takenAt } : {}),
   }
 
   // Idempotent retry: if this sequence slot already exists for the uploader,
@@ -162,6 +176,7 @@ export async function registerGalleryImage(
       await supabase.storage.from("gallery").remove(expectedPaths)
       revalidatePath("/")
       revalidatePath("/upload")
+      revalidatePath("/memories")
       return { ok: true, id: existingSlot.id }
     }
   }
@@ -190,6 +205,7 @@ export async function registerGalleryImage(
         await supabase.storage.from("gallery").remove(expectedPaths)
         revalidatePath("/")
         revalidatePath("/upload")
+        revalidatePath("/memories")
         return { ok: true, id: raced.id }
       }
     }
@@ -200,8 +216,14 @@ export async function registerGalleryImage(
     }
   }
 
+  const tagNames = parseGalleryTagList(input.tagNames)
+  if (tagNames.length > 0) {
+    await attachGalleryTagsToImage(inserted.id, tagNames, userId, supabase)
+  }
+
   revalidatePath("/")
   revalidatePath("/upload")
+  revalidatePath("/memories")
   return { ok: true, id: inserted.id }
 }
 
@@ -338,14 +360,15 @@ export async function updateGallerySequenceOrder(
   return { ok: true }
 }
 
+export type RenameGalleryImageResult =
+  | { ok: true; names: { id: string; name: string }[] }
+  | { ok: false; error: string }
+
 export async function renameGalleryImage(
   id: string,
   newName: string
-): Promise<ActionResult> {
-  const trimmed = newName.trim()
-  if (!trimmed) {
-    return { ok: false, error: "Name is required." }
-  }
+): Promise<RenameGalleryImageResult> {
+  const nextName = normalizeArtworkRenameDraft(newName)
 
   const supabase = await createClient()
   const { data: claimsData } = await supabase.auth.getClaims()
@@ -366,12 +389,13 @@ export async function renameGalleryImage(
     }
   }
 
-  // If renaming the cover shot of a burst sequence, apply the base name to
-  // the whole sequence so users see consistent names.
-  const shouldRenameSequence =
-    Boolean(currentRow?.sequence_id) && currentRow.sequence_index === 0
-
-  if (shouldRenameSequence) {
+  // Cover rename cascades across the burst so wall + strip stay consistent.
+  if (
+    shouldCascadeSequenceRename(
+      currentRow?.sequence_id,
+      currentRow?.sequence_index
+    )
+  ) {
     const sequenceId = currentRow.sequence_id as string
 
     const { data: sequenceRows, error: seqLoadError } = await supabase
@@ -388,36 +412,36 @@ export async function renameGalleryImage(
       }
     }
 
-    for (let idx = 0; idx < (sequenceRows ?? []).length; idx++) {
-      const row = sequenceRows[idx]!
-      const sequenceIndex =
-        typeof row.sequence_index === "number" ? row.sequence_index : idx
-      const nextName =
-        sequenceIndex === 0 ? trimmed : `${trimmed}${sequenceIndex}`
+    const patches = buildSequenceRenamePatches(sequenceRows ?? [], nextName)
 
+    for (const patch of patches) {
       const { error: updateError } = await supabase
         .from("gallery_images")
-        .update({ name: nextName })
-        .eq("id", row.id)
+        .update({ name: patch.name })
+        .eq("id", patch.id)
         .eq("created_by", userId)
 
       if (updateError) {
         return { ok: false, error: `Rename failed: ${updateError.message}` }
       }
     }
-  } else {
-    const { error: updateError } = await supabase
-      .from("gallery_images")
-      .update({ name: trimmed })
-      .eq("id", id)
-      .eq("created_by", userId)
 
-    if (updateError) {
-      return { ok: false, error: `Rename failed: ${updateError.message}` }
-    }
+    revalidatePath("/")
+    revalidatePath("/upload")
+    return { ok: true, names: patches }
+  }
+
+  const { error: updateError } = await supabase
+    .from("gallery_images")
+    .update({ name: nextName })
+    .eq("id", id)
+    .eq("created_by", userId)
+
+  if (updateError) {
+    return { ok: false, error: `Rename failed: ${updateError.message}` }
   }
 
   revalidatePath("/")
   revalidatePath("/upload")
-  return { ok: true }
+  return { ok: true, names: [{ id, name: nextName }] }
 }

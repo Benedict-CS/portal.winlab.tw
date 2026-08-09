@@ -932,6 +932,56 @@ export type Database = {
           },
         ]
       }
+      gallery_image_tags: {
+        Row: {
+          created_at: string
+          created_by: string
+          image_id: string
+          tag_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          image_id: string
+          tag_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          image_id?: string
+          tag_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_image_tags_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_image_tags_image_id_fkey"
+            columns: ["image_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_images"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_image_tags_image_id_fkey"
+            columns: ["image_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_wall_covers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_image_tags_tag_id_fkey"
+            columns: ["tag_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_tags"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       gallery_images: {
         Row: {
           created_at: string
@@ -945,6 +995,7 @@ export type Database = {
           poster_path: string | null
           sequence_id: string | null
           sequence_index: number | null
+          taken_at: string
         }
         Insert: {
           created_at?: string
@@ -958,6 +1009,7 @@ export type Database = {
           poster_path?: string | null
           sequence_id?: string | null
           sequence_index?: number | null
+          taken_at?: string
         }
         Update: {
           created_at?: string
@@ -971,6 +1023,7 @@ export type Database = {
           poster_path?: string | null
           sequence_id?: string | null
           sequence_index?: number | null
+          taken_at?: string
         }
         Relationships: [
           {
@@ -1005,6 +1058,38 @@ export type Database = {
           {
             foreignKeyName: "gallery_settings_updated_by_fkey"
             columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      gallery_tags: {
+        Row: {
+          created_at: string
+          created_by: string
+          id: string
+          name: string
+          slug: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          id?: string
+          name: string
+          slug: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          id?: string
+          name?: string
+          slug?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_tags_created_by_fkey"
+            columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "user_profiles"
             referencedColumns: ["id"]
@@ -2091,6 +2176,7 @@ export type Database = {
           poster_path: string | null
           sequence_id: string | null
           sequence_index: number | null
+          taken_at: string | null
         }
         Relationships: [
           {
@@ -2218,7 +2304,40 @@ export type Database = {
         Args: { p_image_id: string; p_pinned: boolean }
         Returns: undefined
       }
+      gallery_list_popular_tags: {
+        Args: { p_limit?: number }
+        Returns: {
+          id: string
+          name: string
+          slug: string
+          use_count: number
+        }[]
+      }
+      gallery_wall_cover_ids_for_tag: {
+        Args: { p_tag_slug: string }
+        Returns: string[]
+      }
       gallery_wall_cover_rank: { Args: { p_image_id: string }; Returns: number }
+      gallery_memories_on_this_day: {
+        Args: {
+          p_month: number
+          p_day: number
+          p_limit?: number
+        }
+        Returns: {
+          id: string
+          name: string
+          image_path: string
+          media_type: string
+          poster_path: string | null
+          created_by: string
+          created_at: string
+          taken_at: string
+          sequence_id: string | null
+          sequence_index: number | null
+          memory_year: number
+        }[]
+      }
       get_game_leaderboard: {
         Args: {
           p_game_type: Database["public"]["Enums"]["game_type"]
