@@ -247,58 +247,10 @@ export function GalleryCard({
     onPrev: goLightboxPrev,
     onNext: goLightboxNext,
     onSwipeUp: () => setMobileDetailsOpen(true),
+    onSwipeDown: () => setMobileDetailsOpen(false),
   })
 
-  useEffect(() => {
-    if (!isDialogOpen) return
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (event.key === "ArrowLeft") {
-        event.preventDefault()
-        goLightboxPrev()
-        return
-      }
-      if (event.key === "ArrowRight") {
-        event.preventDefault()
-        goLightboxNext()
-        return
-      }
-      if (event.key === "i" || event.key === "I") {
-        event.preventDefault()
-        setMobileDetailsOpen((open) => !open)
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [goLightboxNext, goLightboxPrev, isDialogOpen])
-
-  // Prefetch adjacent sequence full-res for snappier story browsing.
-  useEffect(() => {
-    if (!isDialogOpen) return
-    const neighbors = [activeIndex - 1, activeIndex + 1]
-      .map((idx) => sequenceMedia[idx])
-      .filter(Boolean)
-    const urls = neighbors.flatMap((item) => [
-      mediaUrlFromItem(item!),
-      thumbUrlFromItem(item!),
-    ])
-    cacheGalleryMediaUrls(urls)
-    // sequenceMedia identity changes each render; key off length + active shot.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment
-  }, [activeIndex, isDialogOpen, image.id, sequenceMedia.length])
-
-  const handlePinSuccess = (nextPinnedAt: string | null) => {
-    setPinnedAt(nextPinnedAt)
-    if (nextPinnedAt) {
-      handleDialogOpenChange(false)
-      onOpenChange?.(false)
-    }
-  }
-
-  const copyShareLink = async () => {
+  const copyShareLink = useCallback(async () => {
     const href = buildGalleryPhotoHref({
       photoId: image.id,
       commentId: highlightCommentId,
@@ -320,6 +272,60 @@ export function GalleryCard({
       toast.success("Link copied.")
     } catch {
       toast.error("Could not copy link.")
+    }
+  }, [activeItem?.name, highlightCommentId, image.id, image.name])
+
+  useEffect(() => {
+    if (!isDialogOpen) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.key === "ArrowLeft") {
+        event.preventDefault()
+        goLightboxPrev()
+        return
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault()
+        goLightboxNext()
+        return
+      }
+      if (event.key === "i" || event.key === "I") {
+        event.preventDefault()
+        setMobileDetailsOpen((open) => !open)
+        return
+      }
+      if (event.key === "s" || event.key === "S") {
+        event.preventDefault()
+        void copyShareLink()
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [copyShareLink, goLightboxNext, goLightboxPrev, isDialogOpen])
+
+  // Prefetch adjacent sequence full-res for snappier story browsing.
+  useEffect(() => {
+    if (!isDialogOpen) return
+    const neighbors = [activeIndex - 1, activeIndex + 1]
+      .map((idx) => sequenceMedia[idx])
+      .filter(Boolean)
+    const urls = neighbors.flatMap((item) => [
+      mediaUrlFromItem(item!),
+      thumbUrlFromItem(item!),
+    ])
+    cacheGalleryMediaUrls(urls)
+    // sequenceMedia identity changes each render; key off length + active shot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment
+  }, [activeIndex, isDialogOpen, image.id, sequenceMedia.length])
+
+  const handlePinSuccess = (nextPinnedAt: string | null) => {
+    setPinnedAt(nextPinnedAt)
+    if (nextPinnedAt) {
+      handleDialogOpenChange(false)
+      onOpenChange?.(false)
     }
   }
 
@@ -365,11 +371,27 @@ export function GalleryCard({
                   {thumbFailed ? (
                     <div
                       className={cn(
-                        "mx-2.5 mt-2.5 flex items-center justify-center bg-muted/80 px-4 text-center text-xs text-muted-foreground",
+                        "mx-2.5 mt-2.5 flex flex-col items-center justify-center gap-2 bg-gradient-to-b from-neutral-200/80 to-neutral-300/70 px-4 text-center shadow-[inset_0_0_0_1px_rgba(24,24,27,0.06)]",
                         frame.aspectClass
                       )}
                     >
-                      Preview unavailable
+                      <Image
+                        src="/icons/mark.png"
+                        alt=""
+                        width={40}
+                        height={40}
+                        className="size-9 object-contain opacity-40 grayscale"
+                        draggable={false}
+                        unoptimized
+                      />
+                      <span
+                        className={cn(
+                          gallerySans(),
+                          "text-[11px] tracking-wide text-zinc-500/90"
+                        )}
+                      >
+                        Preview unavailable
+                      </span>
                     </div>
                   ) : (
                     <div
@@ -385,6 +407,7 @@ export function GalleryCard({
                         priority={priorityLcp}
                         sizes="(max-width: 640px) 92vw, (max-width: 1024px) 44vw, 28vw"
                         className="object-cover"
+                        decoding="async"
                         onError={() => setThumbFailed(true)}
                       />
                       {activeIsVideo ? <PlayBadge /> : null}
