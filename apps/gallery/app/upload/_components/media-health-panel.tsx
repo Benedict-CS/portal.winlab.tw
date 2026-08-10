@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useRef, useState, useTransition } from "react"
 
 import { IconAlertTriangle, IconRefresh, IconTrash } from "@tabler/icons-react"
 import { toast } from "sonner"
@@ -21,7 +21,30 @@ import {
   summarizeFindings,
   type MediaHealthFinding,
 } from "@/lib/gallery/media-health"
+import {
+  describeDeleteForeverLabel,
+  describeDeletingLabel,
+  describeMediaHealthAllHealthy,
+  describeMediaHealthDeleted,
+  describeMediaHealthFoundBroken,
+} from "@/lib/gallery/media-health-toast"
+import { describeScanningLabel } from "@/lib/gallery/busy-labels"
+import {
+  describeClearBrokenShotsAriaLabel,
+  describeMediaHealthClearAllLabel,
+} from "@/lib/gallery/chrome-hints"
+import { describeSelectAtLeastOneBrokenShot } from "@/lib/gallery/validation-toasts"
 import { buildGalleryPhotoHref } from "@/lib/gallery/photo-deep-link"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@workspace/ui/components/alert-dialog"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -37,8 +60,13 @@ export function MediaHealthPanel() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [progress, setProgress] = useState<ScanProgress | null>(null)
   const [hasScanned, setHasScanned] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const deleteTriggerRef = useRef<HTMLButtonElement>(null)
 
   const summary = summarizeFindings(findings)
+  const selectedCount = selected.size
+  const allFindingsSelected =
+    findings.length > 0 && findings.every((finding) => selected.has(finding.id))
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -92,12 +120,13 @@ export function MediaHealthPanel() {
       setHasScanned(true)
       const finalSummary = summarizeFindings(collected)
       if (finalSummary.total === 0) {
-        toast.success(
-          `Scanned ${scanned} shot${scanned === 1 ? "" : "s"} — all healthy.`
-        )
+        toast.success(describeMediaHealthAllHealthy(scanned))
       } else {
         toast.message(
-          `Found ${finalSummary.total} broken shot${finalSummary.total === 1 ? "" : "s"} across ${scanned}.`
+          describeMediaHealthFoundBroken({
+            broken: finalSummary.total,
+            scanned,
+          })
         )
       }
     })
@@ -113,10 +142,11 @@ export function MediaHealthPanel() {
       }))
 
     if (items.length === 0) {
-      toast.error("Select at least one broken shot.")
+      toast.error(describeSelectAtLeastOneBrokenShot())
       return
     }
 
+    setConfirmOpen(false)
     startTransition(async () => {
       const result = await adminDeleteBrokenGalleryImages(items)
       if (!result.ok) {
@@ -127,14 +157,17 @@ export function MediaHealthPanel() {
       const deletedIds = new Set(items.map((item) => item.id))
       setFindings((prev) => prev.filter((f) => !deletedIds.has(f.id)))
       setSelected(new Set())
-      toast.success(
-        `Removed ${result.deleted} broken shot${result.deleted === 1 ? "" : "s"} from the wall.`
-      )
+      const message = describeMediaHealthDeleted(result.deleted)
+      if (result.warning) {
+        toast.warning(message, { description: result.warning })
+      } else {
+        toast.success(message)
+      }
     })
   }
 
   return (
-    <section className={galleryPanelClass()}>
+    <section className={galleryPanelClass()} aria-busy={isPending || undefined}>
       <div className="space-y-1">
         <h2 className={cn(gallerySectionTitleClass(), "text-2xl sm:text-3xl")}>
           Media health
@@ -152,11 +185,12 @@ export function MediaHealthPanel() {
           variant="outline"
           size="sm"
           disabled={isPending}
+          aria-busy={isPending || undefined}
           onClick={runScan}
           className={cn(gallerySans(), "gap-1.5")}
         >
           <IconRefresh className="size-3.5" aria-hidden />
-          {isPending && progress ? "Scanning…" : "Scan gallery"}
+          {isPending && progress ? describeScanningLabel() : "Scan gallery"}
         </Button>
 
         {findings.length > 0 ? (
@@ -166,10 +200,24 @@ export function MediaHealthPanel() {
               variant="ghost"
               size="sm"
               disabled={isPending}
-              onClick={selectAllBroken}
+              aria-pressed={allFindingsSelected}
+              aria-label={
+                allFindingsSelected
+                  ? describeClearBrokenShotsAriaLabel()
+                  : `Select all ${findings.length} broken shots`
+              }
+              onClick={() => {
+                if (allFindingsSelected) {
+                  clearSelection()
+                  return
+                }
+                selectAllBroken()
+              }}
               className={gallerySans()}
             >
-              Select all ({findings.length})
+              {allFindingsSelected
+                ? describeMediaHealthClearAllLabel()
+                : `Select all (${findings.length})`}
             </Button>
             {selected.size > 0 ? (
               <>
@@ -184,11 +232,12 @@ export function MediaHealthPanel() {
                   Clear
                 </Button>
                 <Button
+                  ref={deleteTriggerRef}
                   type="button"
                   variant="destructive"
                   size="sm"
                   disabled={isPending}
-                  onClick={runDelete}
+                  onClick={() => setConfirmOpen(true)}
                   className={cn(gallerySans(), "gap-1.5")}
                 >
                   <IconTrash className="size-3.5" aria-hidden />
@@ -202,6 +251,8 @@ export function MediaHealthPanel() {
 
       {progress ? (
         <p
+          role="status"
+          aria-live="polite"
           className={cn(
             gallerySans(),
             "mt-3 text-xs text-muted-foreground tabular-nums"
@@ -297,6 +348,44 @@ export function MediaHealthPanel() {
           </ul>
         </div>
       ) : null}
+
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          setConfirmOpen(open)
+          if (!open) {
+            queueMicrotask(() => deleteTriggerRef.current?.focus())
+          }
+        }}
+      >
+        <AlertDialogContent aria-busy={isPending || undefined}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Permanently delete {selectedCount} broken shot
+              {selectedCount === 1 ? "" : "s"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the selected rows from the gallery and deletes their
+              storage objects. Cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isPending}>
+              Keep them
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={runDelete}
+              disabled={isPending}
+              aria-busy={isPending || undefined}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              {isPending
+                ? describeDeletingLabel()
+                : describeDeleteForeverLabel()}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   )
 }

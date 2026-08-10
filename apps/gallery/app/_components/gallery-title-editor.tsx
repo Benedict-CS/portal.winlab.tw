@@ -8,6 +8,13 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { renameGalleryImage } from "@/app/upload/actions"
 import { gallerySans, gallerySerif } from "@/components/gallery-chrome"
+import {
+  describeArtworkTitleUpdated,
+  describeEditTitleAriaLabel,
+  describeEditTitleNamedAriaLabel,
+} from "@/lib/gallery/manage-toast"
+import { describeSavingLabel } from "@/lib/gallery/busy-labels"
+import { describeSaveLabel } from "@/lib/gallery/dialog-action-labels"
 import type { ArtworkNamePatch } from "@/lib/gallery/rename-artwork"
 import { ARTWORK_NAME_MAX } from "@/lib/gallery/upload-naming"
 
@@ -32,6 +39,8 @@ export function GalleryTitleEditor({
 }: GalleryTitleEditorProps) {
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
+  const editTriggerRef = useRef<HTMLButtonElement>(null)
+  const focusRestoreRef = useRef<HTMLButtonElement | null>(null)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
   const [pending, startTransition] = useTransition()
@@ -45,14 +54,22 @@ export function GalleryTitleEditor({
     return () => window.cancelAnimationFrame(frame)
   }, [editing])
 
-  function beginEdit() {
+  function endEditing() {
+    setEditing(false)
+    const trigger = focusRestoreRef.current ?? editTriggerRef.current
+    focusRestoreRef.current = null
+    queueMicrotask(() => trigger?.focus())
+  }
+
+  function beginEdit(trigger?: HTMLButtonElement | null) {
+    focusRestoreRef.current = trigger ?? editTriggerRef.current
     setDraft(name)
     setEditing(true)
   }
 
   function cancel() {
     setDraft(name)
-    setEditing(false)
+    endEditing()
   }
 
   function save() {
@@ -64,14 +81,15 @@ export function GalleryTitleEditor({
         return
       }
       onRenamed?.(result.names)
-      toast.success("Title updated")
-      setEditing(false)
+      toast.success(describeArtworkTitleUpdated())
+      endEditing()
     })
   }
 
   if (!canEdit) {
     return (
       <h2
+        title={name}
         className={cn(
           titleClass(variant),
           variant === "polaroid" && "truncate text-center",
@@ -90,6 +108,7 @@ export function GalleryTitleEditor({
           "gallery-title-editor flex min-w-0 flex-col gap-2",
           className
         )}
+        aria-busy={pending || undefined}
       >
         <label htmlFor={inputId} className="sr-only">
           Title
@@ -123,7 +142,7 @@ export function GalleryTitleEditor({
           )}
           autoComplete="off"
           spellCheck={false}
-          aria-busy={pending}
+          aria-busy={pending || undefined}
         />
         <div
           className={cn(
@@ -136,10 +155,11 @@ export function GalleryTitleEditor({
             type="button"
             onClick={save}
             disabled={pending}
+            aria-busy={pending || undefined}
             className="inline-flex items-center gap-1 rounded-full bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
           >
             <IconCheck className="size-3.5" aria-hidden />
-            Save
+            {pending ? describeSavingLabel() : describeSaveLabel()}
           </button>
           <button
             type="button"
@@ -167,11 +187,12 @@ export function GalleryTitleEditor({
       )}
     >
       <button
+        ref={editTriggerRef}
         type="button"
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
-          beginEdit()
+          beginEdit(event.currentTarget)
         }}
         className={cn(
           titleClass(variant),
@@ -179,8 +200,8 @@ export function GalleryTitleEditor({
           "focus-visible:ring-2 focus-visible:ring-zinc-800/15 focus-visible:outline-none",
           variant === "polaroid" && "truncate text-center"
         )}
-        aria-label={`Edit title: ${name}`}
-        title="Edit title"
+        aria-label={describeEditTitleNamedAriaLabel(name)}
+        title={variant === "polaroid" ? name : describeEditTitleAriaLabel()}
       >
         {name}
       </button>
@@ -189,7 +210,7 @@ export function GalleryTitleEditor({
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
-          beginEdit()
+          beginEdit(event.currentTarget)
         }}
         className={cn(
           "inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors",
@@ -197,7 +218,7 @@ export function GalleryTitleEditor({
           "focus-visible:ring-2 focus-visible:ring-zinc-800/15 focus-visible:outline-none",
           "opacity-70 group-hover:opacity-100 sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100"
         )}
-        aria-label="Edit title"
+        aria-label={describeEditTitleAriaLabel()}
       >
         <IconPencil className="size-3.5" aria-hidden />
       </button>

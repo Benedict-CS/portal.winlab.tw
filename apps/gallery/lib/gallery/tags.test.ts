@@ -72,6 +72,31 @@ describe("isGalleryTagsUnavailable", () => {
     ).toBe(true)
   })
 
+  test("detects missing search RPC", () => {
+    expect(
+      isGalleryTagsUnavailable({
+        code: "PGRST202",
+        message:
+          "Could not find the function public.gallery_wall_cover_ids_for_query",
+      })
+    ).toBe(true)
+  })
+
+  test("detects missing tag admin RPCs", () => {
+    expect(
+      isGalleryTagsUnavailable({
+        code: "PGRST202",
+        message: "Could not find the function public.gallery_admin_rename_tag",
+      })
+    ).toBe(true)
+    expect(
+      isGalleryTagsUnavailable({
+        code: "PGRST202",
+        message: "Could not find the function public.gallery_admin_merge_tags",
+      })
+    ).toBe(true)
+  })
+
   test("ignores unrelated errors", () => {
     expect(
       isGalleryTagsUnavailable({

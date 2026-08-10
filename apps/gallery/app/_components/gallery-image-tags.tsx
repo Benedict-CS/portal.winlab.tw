@@ -19,12 +19,18 @@ import {
   buildGalleryHomeHref,
   EMPTY_GALLERY_HOME_FILTERS,
 } from "@/lib/gallery/home-filters"
+import { describeGalleryNavError } from "@/lib/gallery/gallery-nav-errors"
 import {
   GALLERY_TAGS_PER_IMAGE_MAX,
   normalizeGalleryTagName,
   normalizeGalleryTagSlug,
   type GalleryTag,
 } from "@/lib/gallery/tags"
+import { describeTagLimitReached } from "@/lib/gallery/validation-toasts"
+import {
+  describeAddTagAriaLabel,
+  describeAddTagPlaceholder,
+} from "@/lib/gallery/tag-admin-toast"
 import { cn } from "@workspace/ui/lib/utils"
 
 export function GalleryImageTags({
@@ -42,21 +48,26 @@ export function GalleryImageTags({
   const [isPending, startTransition] = useTransition()
 
   const applyTagFilter = (slug: string) => {
-    router.push(
-      buildGalleryHomeHref({
-        filters: { ...EMPTY_GALLERY_HOME_FILTERS, tagSlug: slug },
-      })
-    )
+    try {
+      router.push(
+        buildGalleryHomeHref({
+          filters: { ...EMPTY_GALLERY_HOME_FILTERS, tagSlug: slug },
+        })
+      )
+    } catch {
+      toast.error(describeGalleryNavError("openTagFilter"))
+    }
   }
 
   const onAdd = (event?: FormEvent) => {
     event?.preventDefault()
     const name = normalizeGalleryTagName(draft)
+    if (isPending) return
     if (!name) return
     const slug = normalizeGalleryTagSlug(name)
     if (!slug) return
     if (tags.length >= GALLERY_TAGS_PER_IMAGE_MAX) {
-      toast.error(`At most ${GALLERY_TAGS_PER_IMAGE_MAX} tags per photo.`)
+      toast.error(describeTagLimitReached(GALLERY_TAGS_PER_IMAGE_MAX))
       return
     }
     if (tags.some((tag) => tag.slug === slug)) {
@@ -81,6 +92,7 @@ export function GalleryImageTags({
   }
 
   const onRemove = (tag: GalleryTag) => {
+    if (isPending) return
     startTransition(async () => {
       const result = await detachGalleryTag(imageId, tag.id)
       if (!result.ok) {
@@ -101,7 +113,10 @@ export function GalleryImageTags({
   if (!canEdit && tags.length === 0) return null
 
   return (
-    <div className={cn(gallerySans(), "space-y-2")}>
+    <div
+      aria-busy={isPending || undefined}
+      className={cn(gallerySans(), "space-y-2")}
+    >
       <div className="flex flex-wrap items-center gap-1.5">
         {tags.map((tag) => (
           <span
@@ -125,6 +140,7 @@ export function GalleryImageTags({
                 type="button"
                 aria-label={`Remove tag ${tag.name}`}
                 disabled={isPending}
+                aria-busy={isPending || undefined}
                 onClick={() => onRemove(tag)}
                 className="mr-1 inline-flex size-5 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-900/10 hover:text-foreground disabled:opacity-50"
               >
@@ -135,14 +151,18 @@ export function GalleryImageTags({
         ))}
       </div>
       {canEdit ? (
-        <form onSubmit={onAdd} className="flex items-center gap-1.5">
+        <form
+          onSubmit={onAdd}
+          aria-busy={isPending || undefined}
+          className="flex items-center gap-1.5"
+        >
           <input
             type="text"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
             maxLength={40}
-            placeholder="Add a tag…"
+            placeholder={describeAddTagPlaceholder()}
             disabled={isPending || tags.length >= GALLERY_TAGS_PER_IMAGE_MAX}
             className="min-h-8 min-w-0 flex-1 rounded-[2px] border border-zinc-800/18 bg-white/90 px-2.5 text-xs outline-none placeholder:text-zinc-400 focus:border-zinc-800/35"
           />
@@ -153,11 +173,12 @@ export function GalleryImageTags({
               !draft.trim() ||
               tags.length >= GALLERY_TAGS_PER_IMAGE_MAX
             }
+            aria-busy={isPending || undefined}
             className={cn(
               galleryFilterChipClass(false),
               "inline-flex items-center gap-1 disabled:opacity-50"
             )}
-            aria-label="Add tag"
+            aria-label={describeAddTagAriaLabel()}
           >
             <IconPlus className="size-3.5" aria-hidden />
             Tag

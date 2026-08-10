@@ -3,6 +3,7 @@ import Link from "next/link"
 
 import { GalleryAlbumCard } from "@/app/albums/_components/album-card"
 import { GalleryAlbumCreateForm } from "@/app/albums/_components/album-create-form"
+import { GalleryAlbumsSearch } from "@/app/albums/_components/albums-search"
 import { GalleryPageHero } from "@/app/_components/gallery-page-hero"
 import {
   GalleryEmptyState,
@@ -12,6 +13,16 @@ import {
 } from "@/components/gallery-chrome"
 import { GalleryThemedShell } from "@/components/gallery-shell"
 import { loadGalleryAlbumSummaries } from "@/lib/gallery/load-albums"
+import { albumMatchesQuery, isGalleryAlbumsReady } from "@/lib/gallery/albums"
+import {
+  describeAlbumsEmptyDescription,
+  describeAlbumsEmptyTitle,
+  describeAlbumsNotReadyDescription,
+  describeAlbumsNotReadyTitle,
+  describeBackToTheWallLabel,
+  describeClearSearchLabel,
+  describeShowAllAlbumsLabel,
+} from "@/lib/gallery/empty-state-labels"
 import { createClient } from "@/lib/supabase/server"
 import { getCurrentUser } from "@/lib/user"
 import { cn } from "@workspace/ui/lib/utils"
@@ -23,10 +34,27 @@ export const metadata: Metadata = {
   description: "Curated photo collections from the WinLab paper wall.",
 }
 
-export default async function GalleryAlbumsPage() {
+type AlbumsPageProps = {
+  searchParams: Promise<{ mine?: string; q?: string }>
+}
+
+export default async function GalleryAlbumsPage({
+  searchParams,
+}: AlbumsPageProps) {
+  const { mine, q } = await searchParams
+  const mineOnly = mine === "1" || mine === "true"
+  const query = q?.trim() || null
   const supabase = await createClient()
-  const user = await getCurrentUser()
-  const albums = await loadGalleryAlbumSummaries(supabase)
+  const [user, albumsReady] = await Promise.all([
+    getCurrentUser(),
+    isGalleryAlbumsReady(supabase),
+  ])
+  const albums = albumsReady ? await loadGalleryAlbumSummaries(supabase) : []
+  const visibleAlbums = albums.filter((album) => {
+    if (mineOnly && user && album.created_by !== user.id) return false
+    if (query && !albumMatchesQuery(album, query)) return false
+    return true
+  })
 
   return (
     <GalleryThemedShell active="albums" signedIn={Boolean(user)}>
@@ -36,7 +64,20 @@ export default async function GalleryAlbumsPage() {
           lead="Curated collections pulled from the wall — share a slug, keep the story together. Distinct from tags and burst sequences."
         />
 
-        {user ? (
+        {!albumsReady ? (
+          <GalleryEmptyState
+            title={describeAlbumsNotReadyTitle()}
+            description={describeAlbumsNotReadyDescription()}
+            action={
+              <Link
+                href="/"
+                className="underline decoration-zinc-400/80 underline-offset-4 hover:decoration-zinc-700"
+              >
+                {describeBackToTheWallLabel()}
+              </Link>
+            }
+          />
+        ) : user ? (
           <section className={cn(galleryPanelClass(), "space-y-5")}>
             <div className="space-y-1">
               <p
@@ -70,55 +111,119 @@ export default async function GalleryAlbumsPage() {
           </p>
         )}
 
-        {albums.length === 0 ? (
-          <GalleryEmptyState
-            title="No albums yet"
-            description={
-              user
-                ? "Name a collection above, then add photos from any lightbox on the wall."
-                : "When lab members curate collections, they will show up here."
-            }
-            action={
-              <Link
-                href="/"
-                className={cn(
-                  gallerySans(),
-                  "text-sm text-foreground underline-offset-2 hover:underline"
-                )}
-              >
-                Back to the wall
-              </Link>
-            }
-          />
-        ) : (
+        {albumsReady ? (
           <section className="space-y-4">
-            <div className="space-y-1">
-              <p
-                className={cn(
-                  gallerySans(),
-                  "text-[10px] tracking-[0.22em] text-muted-foreground uppercase"
-                )}
-              >
-                Collections
-              </p>
-              <h2
-                className={cn(
-                  gallerySectionTitleClass(),
-                  "text-2xl sm:text-3xl"
-                )}
-              >
-                On the shelf
-              </h2>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="space-y-1">
+                <p
+                  className={cn(
+                    gallerySans(),
+                    "text-[10px] tracking-[0.22em] text-muted-foreground uppercase"
+                  )}
+                >
+                  Collections
+                </p>
+                <h2
+                  className={cn(
+                    gallerySectionTitleClass(),
+                    "text-2xl sm:text-3xl"
+                  )}
+                >
+                  On the shelf
+                </h2>
+              </div>
+              {user ? (
+                <p
+                  className={cn(gallerySans(), "text-xs text-muted-foreground")}
+                >
+                  {mineOnly ? (
+                    <Link
+                      href={
+                        query
+                          ? `/albums?q=${encodeURIComponent(query)}`
+                          : "/albums"
+                      }
+                      className="underline-offset-2 hover:underline"
+                    >
+                      Show all albums
+                    </Link>
+                  ) : (
+                    <Link
+                      href={
+                        query
+                          ? `/albums?mine=1&q=${encodeURIComponent(query)}`
+                          : "/albums?mine=1"
+                      }
+                      className="underline-offset-2 hover:underline"
+                    >
+                      My albums only
+                    </Link>
+                  )}
+                </p>
+              ) : null}
             </div>
-            <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5 md:grid-cols-4">
-              {albums.map((album) => (
-                <li key={album.id}>
-                  <GalleryAlbumCard album={album} />
-                </li>
-              ))}
-            </ul>
+
+            <GalleryAlbumsSearch
+              initialQuery={query ?? ""}
+              mineOnly={mineOnly}
+            />
+
+            {visibleAlbums.length === 0 ? (
+              <GalleryEmptyState
+                title={describeAlbumsEmptyTitle({
+                  query: Boolean(query),
+                  mineOnly,
+                })}
+                description={describeAlbumsEmptyDescription({
+                  query: Boolean(query),
+                  mineOnly,
+                  signedIn: Boolean(user),
+                })}
+                action={
+                  <p className="flex flex-wrap justify-center gap-x-4 gap-y-2">
+                    {query ? (
+                      <Link
+                        href={mineOnly ? "/albums?mine=1" : "/albums"}
+                        className={cn(
+                          gallerySans(),
+                          "text-sm text-foreground underline-offset-2 hover:underline"
+                        )}
+                      >
+                        {describeClearSearchLabel()}
+                      </Link>
+                    ) : null}
+                    <Link
+                      href={query || mineOnly ? "/albums" : "/"}
+                      className={cn(
+                        gallerySans(),
+                        "text-sm text-foreground underline-offset-2 hover:underline"
+                      )}
+                    >
+                      {query || mineOnly
+                        ? describeShowAllAlbumsLabel()
+                        : describeBackToTheWallLabel()}
+                    </Link>
+                  </p>
+                }
+              />
+            ) : (
+              <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3 sm:gap-5 md:grid-cols-4">
+                {visibleAlbums.map((album) => (
+                  <li key={album.id}>
+                    <GalleryAlbumCard
+                      album={album}
+                      showShare={
+                        Boolean(user) &&
+                        (user?.id === album.created_by ||
+                          Boolean(user?.isAdmin))
+                      }
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
-        )}
+        ) : null}
       </div>
     </GalleryThemedShell>
   )

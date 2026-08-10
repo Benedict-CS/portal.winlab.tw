@@ -4,16 +4,33 @@ import { notFound } from "next/navigation"
 
 import { GalleryAlbumManagePanel } from "@/app/albums/_components/album-manage-panel"
 import { GalleryAlbumPhotoGrid } from "@/app/albums/_components/album-photo-grid"
+import { AlbumSlideshowButton } from "@/app/albums/_components/album-slideshow"
+import { DownloadAlbumButton } from "@/app/_components/download-album-button"
 import { GalleryPageHero } from "@/app/_components/gallery-page-hero"
+import { ShareAlbumButton } from "@/app/_components/share-album-button"
 import { GalleryEmptyState, gallerySans } from "@/components/gallery-chrome"
 import { GalleryThemedShell } from "@/components/gallery-shell"
 import { loadGalleryAlbumBySlug } from "@/lib/gallery/load-albums"
+import { isGalleryAlbumsReady } from "@/lib/gallery/albums"
+import {
+  describeAlbumPageNotReadyDescription,
+  describeAlbumStillEmptyDescription,
+  describeAlbumStillEmptyTitle,
+  describeAlbumsNotReadyTitle,
+  describeBackToTheWallLabel,
+  describeBrowseTheWallLabel,
+} from "@/lib/gallery/empty-state-labels"
+import {
+  describeCopyShareLinkLabel,
+  describeShareAlbumLabel,
+} from "@/lib/gallery/album-share-toast"
 import {
   DEFAULT_GALLERY_METADATA,
   resolveGallerySiteOrigin,
 } from "@/lib/gallery/og-metadata"
 import { getGalleryThumbUrl } from "@/lib/gallery/url"
 import { createClient } from "@/lib/supabase/server"
+import { loadFavoritedImageIds } from "@/lib/gallery/favorites"
 import { getCurrentUser } from "@/lib/user"
 import { cn } from "@workspace/ui/lib/utils"
 import { headers } from "next/headers"
@@ -34,7 +51,10 @@ export async function generateMetadata({
 
   const headerStore = await headers()
   const origin = resolveGallerySiteOrigin(headerStore.get("host"))
-  const cover = album.photos[0]
+  const cover =
+    (album.cover_image_id
+      ? album.photos.find((photo) => photo.image_id === album.cover_image_id)
+      : null) ?? album.photos[0]
   const coverPath =
     cover?.media_type === "video" && cover.poster_path
       ? cover.poster_path
@@ -54,6 +74,14 @@ export async function generateMetadata({
         ? [{ url: ogImage, width: 1200, height: 1500 }]
         : undefined,
     },
+    twitter: {
+      card: "summary_large_image",
+      title: album.title,
+      description:
+        album.description ??
+        `Album curated by ${album.owner_name} on the WinLab gallery wall.`,
+      images: ogImage ? [ogImage] : undefined,
+    },
   }
 }
 
@@ -62,12 +90,53 @@ export default async function GalleryAlbumDetailPage({
 }: AlbumPageProps) {
   const { slug } = await params
   const supabase = await createClient()
-  const [user, album] = await Promise.all([
+  const [user, albumsReady] = await Promise.all([
     getCurrentUser(),
-    loadGalleryAlbumBySlug(supabase, slug),
+    isGalleryAlbumsReady(supabase),
   ])
 
+  if (!albumsReady) {
+    return (
+      <GalleryThemedShell active="albums" signedIn={Boolean(user)}>
+        <div className="flex flex-col gap-6">
+          <p className={cn(gallerySans(), "text-xs text-muted-foreground")}>
+            <Link href="/albums" className="underline-offset-2 hover:underline">
+              Albums
+            </Link>
+          </p>
+          <GalleryEmptyState
+            title={describeAlbumsNotReadyTitle()}
+            description={describeAlbumPageNotReadyDescription()}
+            action={
+              <Link
+                href="/"
+                className={cn(
+                  gallerySans(),
+                  "text-sm text-foreground underline-offset-2 hover:underline"
+                )}
+              >
+                {describeBackToTheWallLabel()}
+              </Link>
+            }
+          />
+        </div>
+      </GalleryThemedShell>
+    )
+  }
+
+  const album = await loadGalleryAlbumBySlug(supabase, slug)
   if (!album) notFound()
+
+  if (user) {
+    const favoritedIds = await loadFavoritedImageIds(
+      supabase,
+      user.id,
+      album.photos.map((photo) => photo.image_id)
+    )
+    for (const photo of album.photos) {
+      photo.is_favorited = favoritedIds.has(photo.image_id)
+    }
+  }
 
   const canManage =
     Boolean(user) && (user?.id === album.created_by || Boolean(user?.isAdmin))
@@ -90,29 +159,80 @@ export default async function GalleryAlbumDetailPage({
               `${album.photos.length} photo${album.photos.length === 1 ? "" : "s"} curated by ${album.owner_name}.`
             }
           />
-          <p className={cn(gallerySans(), "text-xs text-muted-foreground")}>
-            by {album.owner_name}
-            <span aria-hidden> · </span>
-            {album.photos.length} photo
-            {album.photos.length === 1 ? "" : "s"}
-            <span aria-hidden> · </span>
-            <a
-              href={`/albums/${album.slug}`}
-              className="underline-offset-2 hover:underline"
-            >
-              shareable link
-            </a>
+          <p
+            className={cn(
+              gallerySans(),
+              "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+            )}
+          >
+            <span>
+              by {album.owner_name}
+              <span aria-hidden> · </span>
+              {album.photos.length} photo
+              {album.photos.length === 1 ? "" : "s"}
+            </span>
           </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <ShareAlbumButton
+              slug={album.slug}
+              title={album.title}
+              emphasize={canManage}
+              label={
+                canManage
+                  ? describeCopyShareLinkLabel()
+                  : describeShareAlbumLabel()
+              }
+            />
+            {album.photos.length > 0 ? (
+              <>
+                <AlbumSlideshowButton
+                  photos={album.photos}
+                  albumTitle={album.title}
+                  className={cn(
+                    gallerySans(),
+                    "inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm shadow-xs",
+                    "hover:bg-accent hover:text-accent-foreground"
+                  )}
+                />
+                <Link
+                  href={`/?album=${encodeURIComponent(album.slug)}`}
+                  className={cn(
+                    gallerySans(),
+                    "inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm shadow-xs",
+                    "hover:bg-accent hover:text-accent-foreground"
+                  )}
+                >
+                  View on wall
+                </Link>
+                <DownloadAlbumButton
+                  className={cn(
+                    gallerySans(),
+                    "inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm shadow-xs",
+                    "hover:bg-accent hover:text-accent-foreground"
+                  )}
+                  albumTitle={album.title}
+                  items={album.photos.map((photo) => ({
+                    name: photo.name,
+                    image_path: photo.image_path,
+                    position: photo.position,
+                  }))}
+                />
+              </>
+            ) : null}
+          </div>
+          {canManage ? (
+            <p className={cn(gallerySans(), "text-xs text-muted-foreground")}>
+              Anyone with the link can open{" "}
+              <span className="text-foreground">/albums/{album.slug}</span> —
+              copy it above to share.
+            </p>
+          ) : null}
         </div>
 
         {album.photos.length === 0 ? (
           <GalleryEmptyState
-            title="Still empty"
-            description={
-              canManage
-                ? "Open any photo on the wall and choose Add to album."
-                : "The curator has not hung any photos here yet."
-            }
+            title={describeAlbumStillEmptyTitle()}
+            description={describeAlbumStillEmptyDescription(canManage)}
             action={
               <Link
                 href="/"
@@ -121,12 +241,19 @@ export default async function GalleryAlbumDetailPage({
                   "text-sm text-foreground underline-offset-2 hover:underline"
                 )}
               >
-                Browse the wall
+                {describeBrowseTheWallLabel()}
               </Link>
             }
           />
         ) : (
-          <GalleryAlbumPhotoGrid photos={album.photos} />
+          <GalleryAlbumPhotoGrid
+            photos={album.photos}
+            albumTitle={album.title}
+            signedIn={Boolean(user)}
+            viewerId={user?.id ?? null}
+            viewerName={user?.name ?? "You"}
+            isAdmin={Boolean(user?.isAdmin)}
+          />
         )}
 
         {canManage ? <GalleryAlbumManagePanel album={album} /> : null}

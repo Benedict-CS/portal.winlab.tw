@@ -1,12 +1,24 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
 
+import { isGalleryAlbumsUnavailable } from "@/lib/gallery/albums"
+import { isGalleryCommentsUnavailable } from "@/lib/gallery/comment-edit"
+import {
+  isGalleryFavoritesUnavailable,
+  loadFavoritedImageIds,
+} from "@/lib/gallery/favorites"
 import type { GalleryHomeFilters } from "@/lib/gallery/home-filters"
-import { findSequenceGaps } from "@/lib/gallery/manage-uploads"
+import {
+  findSequenceGaps,
+  isGalleryPinnedAtUnavailable,
+  isGallerySequenceUnavailable,
+  isGalleryVideoColumnsUnavailable,
+} from "@/lib/gallery/manage-uploads"
 import {
   EMPTY_REACTION_COUNTS,
   EMPTY_REACTION_NAMES,
   aggregateReactions,
   isGalleryReaction,
+  isGalleryReactionsUnavailable,
   normalizeReactionCounts,
   normalizeReactionNames,
 } from "@/lib/gallery/reactions"
@@ -15,8 +27,10 @@ import type { GalleryImage, GalleryMember } from "@/lib/gallery/types"
 
 export const GALLERY_PAGE_SIZE = 36
 
-const COVER_COLUMNS =
-  "id, name, image_path, media_type, poster_path, duration_seconds, created_by, created_at, pinned_at, sequence_id, sequence_index"
+const COVER_COLUMNS_MINIMAL = "id, name, image_path, created_by, created_at"
+const COVER_COLUMNS_WITH_SEQ = `${COVER_COLUMNS_MINIMAL}, sequence_id, sequence_index`
+const COVER_COLUMNS_CORE = `${COVER_COLUMNS_WITH_SEQ}, media_type, poster_path, duration_seconds`
+const COVER_COLUMNS = `${COVER_COLUMNS_CORE}, pinned_at`
 
 // gallery_wall_page = gallery_wall_covers + reaction/comment aggregates.
 const WALL_PAGE_COLUMNS = `${COVER_COLUMNS}, uploader_name, reaction_counts, reaction_names, my_reaction, comment_count`
@@ -58,14 +72,17 @@ type WallFilterable = {
   ilike(column: string, value: string): WallFilterable
 }
 
+export type { WallFilterable }
+
 /**
  * Apply the shared wall filters (uploader / media / after / query). Typed
  * against the flat WallFilterable shape so TS never re-instantiates the full
  * PostgREST builder generic; callers cast the result back to their builder.
  */
-function applyWallFilters(
+export function applyWallFilters(
   query: WallFilterable,
-  filters: GalleryHomeFilters
+  filters: GalleryHomeFilters,
+  options: { skipQuery?: boolean } = {}
 ): WallFilterable {
   let next = query
   if (filters.uploaderId) {
@@ -77,7 +94,7 @@ function applyWallFilters(
   if (filters.uploadedAfter) {
     next = next.gte("created_at", filters.uploadedAfter)
   }
-  if (filters.query) {
+  if (filters.query && !options.skipQuery) {
     next = next.ilike("name", `%${filters.query}%`)
   }
   return next
@@ -86,10 +103,15 @@ function applyWallFilters(
 // Unconstrained passthrough: keeps the caller's builder type while routing the
 // value through applyWallFilters. The unknown casts stop TS from structurally
 // comparing the (deeply recursive) PostgREST builder against WallFilterable.
-function withWallFilters<T>(query: T, filters: GalleryHomeFilters): T {
+function withWallFilters<T>(
+  query: T,
+  filters: GalleryHomeFilters,
+  options: { skipQuery?: boolean } = {}
+): T {
   return applyWallFilters(
     query as unknown as WallFilterable,
-    filters
+    filters,
+    options
   ) as unknown as T
 }
 
@@ -190,14 +212,160 @@ async function resolveTagCoverIds(
     { p_tag_slug: tagSlug }
   )
   if (tagCoverError) {
-    // No RPC yet → treat as empty filter match (shows "No matches"), not a crash.
-    if (isGalleryTagsUnavailable(tagCoverError)) return "none"
-    console.error("[gallery] failed to resolve tag covers", tagCoverError)
-    throw new Error(tagCoverError.message || "Failed to filter by tag.")
+    // No RPC yet / transient failure → empty tag result (not the full wall).
+    if (!isGalleryTagsUnavailable(tagCoverError)) {
+      console.error("[gallery] failed to resolve tag covers", tagCoverError)
+    }
+    return "none"
   }
   const tagCoverIds = ((coverIdRows ?? []) as string[]).filter(Boolean)
   if (tagCoverIds.length === 0) return "none"
   return tagCoverIds
+}
+
+/**
+ * Title + tag search via RPC. Returns:
+ * - null: no query
+ * - "legacy": RPC missing → caller should fall back to name ILIKE
+ * - "none": no matching covers
+ * - string[]: cover ids
+ */
+async function resolveQueryCoverIds(
+  supabase: SupabaseClient,
+  query: string | null
+): Promise<"none" | "legacy" | string[] | null> {
+  if (!query) return null
+  const { data: coverIdRows, error } = await supabase.rpc(
+    "gallery_wall_cover_ids_for_query",
+    { p_query: query }
+  )
+  if (error) {
+    if (
+      isGalleryTagsUnavailable(error) ||
+      /gallery_wall_cover_ids_for_query/i.test(error.message ?? "")
+    ) {
+      return "legacy"
+    }
+    // Keep the wall up with name ILIKE fallback on unexpected RPC errors.
+    console.error("[gallery] failed to resolve search covers", error)
+    return "legacy"
+  }
+  const ids = ((coverIdRows ?? []) as string[]).filter(Boolean)
+  if (ids.length === 0) return "none"
+  return ids
+}
+
+/**
+ * Viewer's saved favorites as wall cover ids.
+ * - null: filter not requested
+ * - "none": no favorites / unsigned / RPC failure
+ * - string[]: cover ids
+ */
+async function resolveFavoriteCoverIds(
+  supabase: SupabaseClient,
+  userId: string | null,
+  savedOnly: boolean
+): Promise<"none" | string[] | null> {
+  if (!savedOnly) return null
+  if (!userId) return "none"
+  const { data: coverIdRows, error } = await supabase.rpc(
+    "gallery_wall_cover_ids_for_favorites"
+  )
+  if (error) {
+    if (!isGalleryFavoritesUnavailable(error)) {
+      console.error("[gallery] failed to resolve favorite covers", error)
+    }
+    // Saved was requested — show empty rather than the unfiltered wall.
+    return "none"
+  }
+  const ids = ((coverIdRows ?? []) as string[]).filter(Boolean)
+  if (ids.length === 0) return "none"
+  return ids
+}
+
+/**
+ * Album membership as wall cover ids (sequence → cover).
+ * - null: filter not requested
+ * - "none": empty album / RPC failure / unknown slug
+ * - string[]: cover ids
+ */
+async function resolveAlbumCoverIds(
+  supabase: SupabaseClient,
+  albumSlug: string | null
+): Promise<"none" | string[] | null> {
+  if (!albumSlug) return null
+  const { data: coverIdRows, error } = await supabase.rpc(
+    "gallery_wall_cover_ids_for_album",
+    { p_slug: albumSlug }
+  )
+  if (error) {
+    if (!isGalleryAlbumsUnavailable(error)) {
+      console.error("[gallery] failed to resolve album covers", error)
+    }
+    // Album filter was requested — show empty rather than the unfiltered wall.
+    return "none"
+  }
+  const ids = ((coverIdRows ?? []) as string[]).filter(Boolean)
+  if (ids.length === 0) return "none"
+  return ids
+}
+
+function applyFavoriteFlags(
+  images: GalleryImage[],
+  favoritedIds: Set<string>
+): void {
+  if (favoritedIds.size === 0) return
+  for (const image of images) {
+    const siblingIds = image.sequence_items.map((item) => item.id)
+    image.is_favorited =
+      favoritedIds.has(image.id) ||
+      siblingIds.some((id) => favoritedIds.has(id))
+  }
+}
+
+/** Intersect optional cover-id filters; "none" wins; null means unconstrained. */
+export function intersectCoverIdFilters(
+  ...filters: Array<"none" | string[] | null>
+): "none" | string[] | null {
+  let current: string[] | null = null
+  for (const filter of filters) {
+    if (filter === null) continue
+    if (filter === "none") return "none"
+    if (current === null) {
+      current = filter
+      continue
+    }
+    const allowed = new Set(filter)
+    current = current.filter((id) => allowed.has(id))
+    if (current.length === 0) return "none"
+  }
+  return current
+}
+
+/** Preserve caller order when hydrating rows fetched via `.in("id", …)`. */
+export function orderRowsByIdList<T extends { id: string }>(
+  rows: readonly T[],
+  orderedIds: readonly string[]
+): T[] {
+  if (orderedIds.length === 0) return []
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const ordered: T[] = []
+  for (const id of orderedIds) {
+    const row = byId.get(id)
+    if (row) ordered.push(row)
+  }
+  return ordered
+}
+
+export function sliceCoverIdsForPage(
+  orderedIds: readonly string[],
+  from: number,
+  to: number
+): string[] {
+  if (orderedIds.length === 0) return []
+  const start = Math.max(0, from)
+  const endExclusive = Math.max(start, to + 1)
+  return orderedIds.slice(start, endExclusive)
 }
 
 function toGalleryImageBase(image: CoverRow): GalleryImage {
@@ -253,12 +421,60 @@ async function loadSequenceRowsById(
     .order("sequence_index", { ascending: true })
     .order("created_at", { ascending: true })
 
+  let rows = sequenceRows
   if (sequenceError) {
-    console.error("[gallery] failed to load sequence rows", sequenceError)
-    return sequenceRowsById
+    if (isGalleryPinnedAtUnavailable(sequenceError)) {
+      const fallback = await supabase
+        .from("gallery_images")
+        .select(COVER_COLUMNS_CORE)
+        .in("sequence_id", sequenceIds)
+        .order("sequence_index", { ascending: true })
+        .order("created_at", { ascending: true })
+      if (fallback.error) {
+        if (isGalleryVideoColumnsUnavailable(fallback.error)) {
+          const noVideo = await supabase
+            .from("gallery_images")
+            .select(COVER_COLUMNS_WITH_SEQ)
+            .in("sequence_id", sequenceIds)
+            .order("sequence_index", { ascending: true })
+            .order("created_at", { ascending: true })
+          if (noVideo.error) {
+            console.error(
+              "[gallery] failed to load sequence rows",
+              noVideo.error
+            )
+            return sequenceRowsById
+          }
+          rows = noVideo.data as unknown as typeof sequenceRows
+        } else {
+          console.error(
+            "[gallery] failed to load sequence rows",
+            fallback.error
+          )
+          return sequenceRowsById
+        }
+      } else {
+        rows = fallback.data as unknown as typeof sequenceRows
+      }
+    } else if (isGalleryVideoColumnsUnavailable(sequenceError)) {
+      const noVideo = await supabase
+        .from("gallery_images")
+        .select(`${COVER_COLUMNS_WITH_SEQ}, pinned_at`)
+        .in("sequence_id", sequenceIds)
+        .order("sequence_index", { ascending: true })
+        .order("created_at", { ascending: true })
+      if (noVideo.error) {
+        console.error("[gallery] failed to load sequence rows", noVideo.error)
+        return sequenceRowsById
+      }
+      rows = noVideo.data as unknown as typeof sequenceRows
+    } else {
+      console.error("[gallery] failed to load sequence rows", sequenceError)
+      return sequenceRowsById
+    }
   }
 
-  for (const row of (sequenceRows ?? []) as CoverRow[]) {
+  for (const row of (rows ?? []) as CoverRow[]) {
     const sequenceId = row.sequence_id
     if (!sequenceId) continue
     const bucket = sequenceRowsById.get(sequenceId) ?? []
@@ -321,8 +537,25 @@ async function loadGalleryHomeRangeViaView(
   supabase: SupabaseClient,
   { from, to, userId, filters }: RangeArgs
 ): Promise<RangeResult | null> {
-  const tagCoverIds = await resolveTagCoverIds(supabase, filters.tagSlug)
-  if (tagCoverIds === "none") {
+  const [tagCoverIds, queryCoverIds, favoriteCoverIds, albumCoverIds] =
+    await Promise.all([
+      resolveTagCoverIds(supabase, filters.tagSlug),
+      resolveQueryCoverIds(supabase, filters.query),
+      resolveFavoriteCoverIds(supabase, userId, filters.savedOnly),
+      resolveAlbumCoverIds(supabase, filters.albumSlug),
+    ])
+  const skipQueryIlike = queryCoverIds !== null && queryCoverIds !== "legacy"
+  // Prefer search-RPC order so title matches page ahead of tag-only hits.
+  const coverIdFilter = intersectCoverIdFilters(
+    queryCoverIds === "legacy" ? null : queryCoverIds,
+    tagCoverIds,
+    favoriteCoverIds,
+    albumCoverIds
+  )
+  const rankedSearchPaging =
+    skipQueryIlike && Array.isArray(coverIdFilter) && coverIdFilter.length > 0
+
+  if (coverIdFilter === "none") {
     const members = userId
       ? buildMembers(
           ((
@@ -336,22 +569,47 @@ async function loadGalleryHomeRangeViaView(
     return { images: [], members, totalCount: 0 }
   }
 
+  const pageCoverIds = rankedSearchPaging
+    ? sliceCoverIdsForPage(coverIdFilter, from, to)
+    : null
+
   let rowsBase = supabase.from("gallery_wall_page").select(WALL_PAGE_COLUMNS)
-  rowsBase = withWallFilters(rowsBase, filters)
-  if (tagCoverIds) {
-    rowsBase = rowsBase.in("id", tagCoverIds)
+  rowsBase = withWallFilters(rowsBase, filters, { skipQuery: skipQueryIlike })
+  if (pageCoverIds) {
+    if (pageCoverIds.length === 0) {
+      const members = userId
+        ? buildMembers(
+            ((
+              await supabase
+                .from("user_profiles")
+                .select("id, name")
+                .order("name", { ascending: true })
+            ).data ?? []) as ProfileRow[]
+          )
+        : []
+      return {
+        images: [],
+        members,
+        totalCount: coverIdFilter?.length ?? 0,
+      }
+    }
+    rowsBase = rowsBase.in("id", pageCoverIds)
+  } else if (coverIdFilter) {
+    rowsBase = rowsBase.in("id", coverIdFilter)
   }
-  const rowsQuery = rowsBase
-    .order("pinned_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false })
-    .range(from, to)
+  const rowsQuery = pageCoverIds
+    ? rowsBase
+    : rowsBase
+        .order("pinned_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .range(from, to)
 
   let countBase = supabase
     .from("gallery_wall_covers")
     .select("id", { count: "exact", head: true })
-  countBase = withWallFilters(countBase, filters)
-  if (tagCoverIds) {
-    countBase = countBase.in("id", tagCoverIds)
+  countBase = withWallFilters(countBase, filters, { skipQuery: skipQueryIlike })
+  if (coverIdFilter) {
+    countBase = countBase.in("id", coverIdFilter)
   }
 
   const [rowsResult, countResult, membersResult] = await Promise.all([
@@ -367,8 +625,13 @@ async function loadGalleryHomeRangeViaView(
 
   if (rowsResult.error) {
     if (isMissingWallPageView(rowsResult.error)) return null
+    // View still references pinned_at — fall back to legacy covers query.
+    if (isGalleryPinnedAtUnavailable(rowsResult.error)) return null
+    if (isGalleryVideoColumnsUnavailable(rowsResult.error)) return null
+    if (isGallerySequenceUnavailable(rowsResult.error)) return null
     console.error("[gallery] failed to load wall page", rowsResult.error)
-    throw new Error(rowsResult.error.message || "Failed to load gallery.")
+    // Fall back to the legacy cover query instead of crashing the wall.
+    return null
   }
   if (countResult.error) {
     console.error("[gallery] failed to count wall covers", countResult.error)
@@ -377,7 +640,11 @@ async function loadGalleryHomeRangeViaView(
     console.error("[gallery] failed to load members", membersResult.error)
   }
 
-  const rows = (rowsResult.data ?? []) as WallPageRow[]
+  const rows = orderRowsByIdList(
+    (rowsResult.data ?? []) as WallPageRow[],
+    pageCoverIds ??
+      ((rowsResult.data ?? []) as WallPageRow[]).map((row) => row.id)
+  )
   const sequenceRowsById = await loadSequenceRowsById(supabase, rows)
   const tagLookupIds = Array.from(
     new Set([
@@ -406,12 +673,21 @@ async function loadGalleryHomeRangeViaView(
 
   expandSequences(images, sequenceRowsById, tagsByImage)
 
+  const favoritedIds = await loadFavoritedImageIds(
+    supabase,
+    userId,
+    tagLookupIds
+  )
+  applyFavoriteFlags(images, favoritedIds)
+
   return {
     images,
     members: userId
       ? buildMembers((membersResult.data ?? []) as ProfileRow[])
       : [],
-    totalCount: countResult.count ?? 0,
+    totalCount: rankedSearchPaging
+      ? (coverIdFilter?.length ?? 0)
+      : (countResult.count ?? 0),
   }
 }
 
@@ -424,8 +700,24 @@ async function loadGalleryHomeRangeLegacy(
   supabase: SupabaseClient,
   { from, to, userId, filters }: RangeArgs
 ): Promise<RangeResult> {
-  const tagCoverIds = await resolveTagCoverIds(supabase, filters.tagSlug)
-  if (tagCoverIds === "none") {
+  const [tagCoverIds, queryCoverIds, favoriteCoverIds, albumCoverIds] =
+    await Promise.all([
+      resolveTagCoverIds(supabase, filters.tagSlug),
+      resolveQueryCoverIds(supabase, filters.query),
+      resolveFavoriteCoverIds(supabase, userId, filters.savedOnly),
+      resolveAlbumCoverIds(supabase, filters.albumSlug),
+    ])
+  const skipQueryIlike = queryCoverIds !== null && queryCoverIds !== "legacy"
+  const coverIdFilter = intersectCoverIdFilters(
+    queryCoverIds === "legacy" ? null : queryCoverIds,
+    tagCoverIds,
+    favoriteCoverIds,
+    albumCoverIds
+  )
+  const rankedSearchPaging =
+    skipQueryIlike && Array.isArray(coverIdFilter) && coverIdFilter.length > 0
+
+  if (coverIdFilter === "none") {
     const members = userId
       ? buildMembers(
           ((
@@ -439,7 +731,11 @@ async function loadGalleryHomeRangeLegacy(
     return { images: [], members, totalCount: 0 }
   }
 
-  const [profilesResult, imagesResult] = await Promise.all([
+  const pageCoverIds = rankedSearchPaging
+    ? sliceCoverIdsForPage(coverIdFilter, from, to)
+    : null
+
+  const [profilesResult, imagesResultInitial] = await Promise.all([
     userId
       ? supabase
           .from("user_profiles")
@@ -450,9 +746,19 @@ async function loadGalleryHomeRangeLegacy(
       let base = supabase
         .from("gallery_wall_covers")
         .select(COVER_COLUMNS, { count: "exact" })
-      base = withWallFilters(base, filters)
-      if (tagCoverIds) {
-        base = base.in("id", tagCoverIds)
+      base = withWallFilters(base, filters, { skipQuery: skipQueryIlike })
+      if (pageCoverIds) {
+        if (pageCoverIds.length === 0) {
+          return Promise.resolve({
+            data: [] as CoverRow[],
+            error: null,
+            count: coverIdFilter?.length ?? 0,
+          })
+        }
+        return base.in("id", pageCoverIds)
+      }
+      if (coverIdFilter) {
+        base = base.in("id", coverIdFilter)
       }
       return base
         .order("pinned_at", { ascending: false, nullsFirst: false })
@@ -461,9 +767,108 @@ async function loadGalleryHomeRangeLegacy(
     })(),
   ])
 
+  let imagesResult: {
+    data: CoverRow[] | null
+    error: PostgrestError | null
+    count?: number | null
+  } = imagesResultInitial as {
+    data: CoverRow[] | null
+    error: PostgrestError | null
+    count?: number | null
+  }
+  if (imagesResult.error && isGalleryPinnedAtUnavailable(imagesResult.error)) {
+    imagesResult = (await (() => {
+      let base = supabase
+        .from("gallery_wall_covers")
+        .select(COVER_COLUMNS_CORE, { count: "exact" })
+      base = withWallFilters(base, filters, { skipQuery: skipQueryIlike })
+      if (pageCoverIds) {
+        if (pageCoverIds.length === 0) {
+          return Promise.resolve({
+            data: [] as CoverRow[],
+            error: null,
+            count: coverIdFilter?.length ?? 0,
+          })
+        }
+        return base.in("id", pageCoverIds)
+      }
+      if (coverIdFilter) {
+        base = base.in("id", coverIdFilter)
+      }
+      return base.order("created_at", { ascending: false }).range(from, to)
+    })()) as {
+      data: CoverRow[] | null
+      error: PostgrestError | null
+      count?: number | null
+    }
+  }
+
+  if (
+    imagesResult.error &&
+    isGalleryVideoColumnsUnavailable(imagesResult.error)
+  ) {
+    imagesResult = (await (() => {
+      let base = supabase
+        .from("gallery_wall_covers")
+        .select(COVER_COLUMNS_WITH_SEQ, { count: "exact" })
+      base = withWallFilters(base, filters, { skipQuery: skipQueryIlike })
+      if (pageCoverIds) {
+        if (pageCoverIds.length === 0) {
+          return Promise.resolve({
+            data: [] as CoverRow[],
+            error: null,
+            count: coverIdFilter?.length ?? 0,
+          })
+        }
+        return base.in("id", pageCoverIds)
+      }
+      if (coverIdFilter) {
+        base = base.in("id", coverIdFilter)
+      }
+      return base.order("created_at", { ascending: false }).range(from, to)
+    })()) as {
+      data: CoverRow[] | null
+      error: PostgrestError | null
+      count?: number | null
+    }
+  }
+
+  if (imagesResult.error && isGallerySequenceUnavailable(imagesResult.error)) {
+    imagesResult = (await (() => {
+      let base = supabase
+        .from("gallery_wall_covers")
+        .select(COVER_COLUMNS_MINIMAL, { count: "exact" })
+      base = withWallFilters(base, filters, { skipQuery: skipQueryIlike })
+      if (pageCoverIds) {
+        if (pageCoverIds.length === 0) {
+          return Promise.resolve({
+            data: [] as CoverRow[],
+            error: null,
+            count: coverIdFilter?.length ?? 0,
+          })
+        }
+        return base.in("id", pageCoverIds)
+      }
+      if (coverIdFilter) {
+        base = base.in("id", coverIdFilter)
+      }
+      return base.order("created_at", { ascending: false }).range(from, to)
+    })()) as {
+      data: CoverRow[] | null
+      error: PostgrestError | null
+      count?: number | null
+    }
+  }
+
   if (imagesResult.error) {
     console.error("[gallery] failed to load images", imagesResult.error)
-    throw new Error(imagesResult.error.message || "Failed to load gallery.")
+    return {
+      images: [],
+      members: userId
+        ? buildMembers((profilesResult.data ?? []) as ProfileRow[])
+        : [],
+      totalCount: 0,
+    }
   }
   if (profilesResult.error) {
     console.error(
@@ -472,7 +877,11 @@ async function loadGalleryHomeRangeLegacy(
     )
   }
 
-  const coverRows = (imagesResult.data ?? []) as CoverRow[]
+  const coverRows = orderRowsByIdList(
+    (imagesResult.data ?? []) as CoverRow[],
+    pageCoverIds ??
+      ((imagesResult.data ?? []) as CoverRow[]).map((row) => row.id)
+  )
   const sequenceRowsById = await loadSequenceRowsById(supabase, coverRows)
 
   const imageIds = coverRows.map((image) => image.id)
@@ -504,16 +913,20 @@ async function loadGalleryHomeRangeLegacy(
     ])
 
     if (voteResult.error) {
-      console.error("[gallery] failed to load reactions", voteResult.error)
+      if (!isGalleryReactionsUnavailable(voteResult.error)) {
+        console.error("[gallery] failed to load reactions", voteResult.error)
+      }
     }
     if (commentCountResult.error) {
-      console.error(
-        "[gallery] failed to load comment counts",
-        commentCountResult.error
-      )
+      if (!isGalleryCommentsUnavailable(commentCountResult.error)) {
+        console.error(
+          "[gallery] failed to load comment counts",
+          commentCountResult.error
+        )
+      }
     }
 
-    const voteRows = voteResult.data ?? []
+    const voteRows = voteResult.error ? [] : (voteResult.data ?? [])
     commentCountByImage = buildCommentCountByImage(
       (commentCountResult.data ?? []) as { image_id: string }[]
     )
@@ -572,12 +985,21 @@ async function loadGalleryHomeRangeLegacy(
 
   expandSequences(images, sequenceRowsById, tagsByImage)
 
+  const favoritedIds = await loadFavoritedImageIds(
+    supabase,
+    userId,
+    tagLookupIds
+  )
+  applyFavoriteFlags(images, favoritedIds)
+
   return {
     images,
     members: userId
       ? buildMembers((profilesResult.data ?? []) as ProfileRow[])
       : [],
-    totalCount: imagesResult.count ?? 0,
+    totalCount: rankedSearchPaging
+      ? (coverIdFilter?.length ?? 0)
+      : (imagesResult.count ?? 0),
   }
 }
 
@@ -596,6 +1018,8 @@ const DEFAULT_FILTERS: GalleryHomeFilters = {
   uploadedAfter: null,
   query: null,
   tagSlug: null,
+  savedOnly: false,
+  albumSlug: null,
 }
 
 export async function loadGalleryHomePage(

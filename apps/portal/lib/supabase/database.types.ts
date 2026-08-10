@@ -1096,6 +1096,39 @@ export type Database = {
           },
         ]
       }
+      gallery_favorites: {
+        Row: {
+          created_at: string
+          image_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          image_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          image_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "gallery_favorites_image_id_fkey"
+            columns: ["image_id"]
+            isOneToOne: false
+            referencedRelation: "gallery_images"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "gallery_favorites_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       game_scores: {
         Row: {
           created_at: string
@@ -2316,6 +2349,62 @@ export type Database = {
       gallery_wall_cover_ids_for_tag: {
         Args: { p_tag_slug: string }
         Returns: string[]
+      }
+      gallery_wall_cover_ids_for_query: {
+        Args: { p_query: string }
+        Returns: string[]
+      }
+      gallery_wall_cover_ids_for_favorites: {
+        Args: Record<string, never>
+        Returns: string[]
+      }
+      gallery_wall_cover_ids_for_album: {
+        Args: { p_slug: string }
+        Returns: string[]
+      }
+      gallery_album_add_images: {
+        Args: { p_album_id: string; p_image_ids: string[] }
+        Returns: number
+      }
+      gallery_album_remove_images: {
+        Args: { p_album_id: string; p_image_ids: string[] }
+        Returns: number
+      }
+      gallery_album_reorder_images: {
+        Args: { p_album_id: string; p_image_ids: string[] }
+        Returns: number
+      }
+      gallery_album_photos: {
+        Args: { p_slug: string }
+        Returns: {
+          image_id: string
+          name: string
+          image_path: string
+          media_type: string
+          poster_path: string | null
+          uploader_name: string
+          created_by: string | null
+          created_at: string
+          sort_position: number
+          added_at: string
+        }[]
+      }
+      gallery_admin_rename_tag: {
+        Args: { p_tag_id: string; p_new_name: string }
+        Returns: {
+          id: string
+          name: string
+          slug: string
+        }[]
+      }
+      gallery_admin_merge_tags: {
+        Args: { p_source_id: string; p_target_id: string }
+        Returns: {
+          id: string
+          name: string
+          slug: string
+          moved_count: number
+        }[]
       }
       gallery_wall_cover_rank: { Args: { p_image_id: string }; Returns: number }
       gallery_memories_on_this_day: {

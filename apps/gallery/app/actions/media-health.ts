@@ -14,7 +14,13 @@ import {
   type MediaHealthFinding,
   type MediaHealthScanRow,
 } from "@/lib/gallery/media-health"
+import { isGalleryVideoColumnsUnavailable } from "@/lib/gallery/manage-uploads"
 import { getGalleryImageUrl, getGalleryThumbUrl } from "@/lib/gallery/url"
+import {
+  describeNothingSelectedError,
+  describePleaseSignInFirst,
+  describeStorageDeleteLeftoversWarning,
+} from "@/lib/gallery/action-errors"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { createClient } from "@/lib/supabase/server"
 
@@ -32,7 +38,7 @@ export type ScanMediaHealthPageResult =
   | MediaHealthActionError
 
 export type AdminDeleteBrokenResult =
-  | { ok: true; deleted: number }
+  | { ok: true; deleted: number; warning?: string }
   | MediaHealthActionError
 
 async function requireGalleryAdmin(): Promise<
@@ -41,7 +47,7 @@ async function requireGalleryAdmin(): Promise<
   const supabase = await createClient()
   const { data: claimsData } = await supabase.auth.getClaims()
   const userId = claimsData?.claims?.sub
-  if (!userId) return { ok: false, error: "Please sign in first." }
+  if (!userId) return { ok: false, error: describePleaseSignInFirst() }
 
   const { data: profile, error: profileError } = await supabase
     .from("user_profiles")
@@ -134,11 +140,34 @@ export async function scanGalleryMediaHealthPage(
     .order("id", { ascending: false })
     .range(safeOffset, safeOffset + MEDIA_HEALTH_PAGE_SIZE - 1)
 
+  let rows: MediaHealthScanRow[] = (data ?? []) as MediaHealthScanRow[]
   if (error) {
-    return { ok: false, error: `Could not load media: ${error.message}` }
+    if (isGalleryVideoColumnsUnavailable(error)) {
+      const fallback = await supabase
+        .from("gallery_images")
+        .select("id, name, image_path, created_by, created_at")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(safeOffset, safeOffset + MEDIA_HEALTH_PAGE_SIZE - 1)
+      if (fallback.error) {
+        return {
+          ok: false,
+          error: `Could not load media: ${fallback.error.message}`,
+        }
+      }
+      rows = ((fallback.data ?? []) as Array<Record<string, unknown>>).map(
+        (row) =>
+          ({
+            ...row,
+            media_type: "image",
+            poster_path: null,
+          }) as MediaHealthScanRow
+      )
+    } else {
+      return { ok: false, error: `Could not load media: ${error.message}` }
+    }
   }
 
-  const rows = (data ?? []) as MediaHealthScanRow[]
   const probed = await mapWithConcurrency(
     rows,
     MEDIA_HEALTH_PROBE_CONCURRENCY,
@@ -179,7 +208,7 @@ export async function adminDeleteBrokenGalleryImages(
   if (!gate.ok) return gate
 
   if (items.length === 0) {
-    return { ok: false, error: "Nothing selected." }
+    return { ok: false, error: describeNothingSelectedError() }
   }
   if (items.length > MEDIA_HEALTH_PAGE_SIZE) {
     return {
@@ -188,7 +217,16 @@ export async function adminDeleteBrokenGalleryImages(
     }
   }
 
-  const admin = createAdminClient()
+  let admin
+  try {
+    admin = createAdminClient()
+  } catch {
+    return {
+      ok: false,
+      error:
+        "Admin storage client is not configured — set SUPABASE_SECRET_KEY for media health deletes.",
+    }
+  }
   const ids = items.map((item) => item.id)
 
   const { data: existing, error: fetchError } = await admin
@@ -226,6 +264,13 @@ export async function adminDeleteBrokenGalleryImages(
       "[gallery] admin media-health storage delete failed",
       storageError
     )
+    revalidatePath("/")
+    revalidatePath("/upload")
+    return {
+      ok: true,
+      deleted: ids.length,
+      warning: describeStorageDeleteLeftoversWarning(),
+    }
   }
 
   revalidatePath("/")

@@ -12,15 +12,35 @@ import { toast } from "sonner"
 
 import { gallerySans, gallerySerif } from "@/components/gallery-chrome"
 import { useGalleryUpload } from "@/hooks/gallery/use-gallery-upload"
+import {
+  describeDevelopingLabel,
+  describeCancelUploadLabel,
+} from "@/lib/gallery/busy-labels"
+import {
+  describeUntitledLabMomentPlaceholder,
+  describeUploadTagsPlaceholder,
+} from "@/lib/gallery/upload-form-labels"
+import { describeHangUploadLabel } from "@/lib/gallery/hang-upload-label"
 import { formatFailurePreview } from "@/lib/gallery/upload-errors"
 import { buildArtworkName } from "@/lib/gallery/upload-naming"
 import {
   VIDEO_MAX_DURATION_SECONDS,
   VIDEO_MAX_INPUT_BYTES,
 } from "@/lib/gallery/upload-pipeline"
+import {
+  describeUploadFileEmpty,
+  describeUploadFileRequired,
+  describePickUploadMedia,
+} from "@/lib/gallery/validation-toasts"
 
 /** Thin UI — mime/compress/storage/register live in lib + useGalleryUpload. */
-export function UploadForm() {
+export function UploadForm({
+  videoAvailable = true,
+  sequencesAvailable = true,
+}: {
+  videoAvailable?: boolean
+  sequencesAvailable?: boolean
+}) {
   const formRef = useRef<HTMLFormElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [name, setName] = useState("")
@@ -36,7 +56,7 @@ export function UploadForm() {
     cancelUpload,
     runUpload,
     retryFailedUploads,
-  } = useGalleryUpload()
+  } = useGalleryUpload({ sequencesAvailable })
 
   const fileNames = selectedFiles.map((file) => file.name)
   const trimmedName = name.trim()
@@ -49,7 +69,10 @@ export function UploadForm() {
 
   useEffect(() => {
     const urls = selectedFiles.slice(0, 6).map((file) => {
-      if (file.type.startsWith("image/") || file.type.startsWith("video/")) {
+      if (
+        file.type.startsWith("image/") ||
+        (videoAvailable && file.type.startsWith("video/"))
+      ) {
         return URL.createObjectURL(file)
       }
       return ""
@@ -60,12 +83,18 @@ export function UploadForm() {
         if (url) URL.revokeObjectURL(url)
       }
     }
-  }, [selectedFiles])
+  }, [selectedFiles, videoAvailable])
 
   function assignFiles(files: File[]) {
-    const next = files.filter((file) => file.size > 0)
+    if (pending || status.kind === "working") return
+    const next = files.filter((file) => {
+      if (file.size <= 0) return false
+      if (file.type.startsWith("image/")) return true
+      if (videoAvailable && file.type.startsWith("video/")) return true
+      return false
+    })
     if (next.length === 0) {
-      toast.error("Pick a photo or clip.")
+      toast.error(describePickUploadMedia(videoAvailable))
       return
     }
     setFailedUploads([])
@@ -88,16 +117,17 @@ export function UploadForm() {
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (pending || status.kind === "working") return
     const files = selectedFiles.length
       ? selectedFiles
       : Array.from(fileInputRef.current?.files ?? [])
 
     if (files.length === 0) {
-      toast.error("Pick a file.")
+      toast.error(describeUploadFileRequired())
       return
     }
     if (files.some((file) => file.size === 0)) {
-      toast.error("One of the selected files is empty.")
+      toast.error(describeUploadFileEmpty())
       return
     }
 
@@ -117,7 +147,12 @@ export function UploadForm() {
   }
 
   return (
-    <form ref={formRef} onSubmit={onSubmit} className="flex flex-col gap-6">
+    <form
+      ref={formRef}
+      onSubmit={onSubmit}
+      aria-busy={pending || status.kind === "working"}
+      className="flex flex-col gap-6"
+    >
       <div className="flex flex-col gap-1.5">
         <p
           className={cn(
@@ -133,8 +168,9 @@ export function UploadForm() {
           Develop & hang
         </h2>
         <p className={cn(gallerySans(), "text-sm text-muted-foreground")}>
-          Drop polaroids onto the film strip — multi-select becomes one sequence
-          story on the wall.
+          {sequencesAvailable
+            ? "Drop polaroids onto the film strip — multi-select becomes one sequence story on the wall."
+            : "Drop polaroids onto the film strip — each file hangs as its own shot."}
         </p>
       </div>
 
@@ -148,7 +184,7 @@ export function UploadForm() {
         <Input
           id="gallery-name"
           name="name"
-          placeholder="Untitled lab moment"
+          placeholder={describeUntitledLabMomentPlaceholder()}
           value={name}
           onChange={(e) => setName(e.target.value)}
           disabled={pending}
@@ -158,8 +194,9 @@ export function UploadForm() {
           )}
         />
         <p className={cn(gallerySans(), "text-xs text-muted-foreground")}>
-          Base name for a single shot, or the cover title when you multi-select
-          a sequence.
+          {sequencesAvailable
+            ? "Base name for a single shot, or the cover title when you multi-select a sequence."
+            : "Base name applied to each selected shot."}
         </p>
       </div>
 
@@ -173,7 +210,7 @@ export function UploadForm() {
         <Input
           id="gallery-tags"
           name="tags"
-          placeholder="lab trip, sunset"
+          placeholder={describeUploadTagsPlaceholder()}
           value={tagsDraft}
           onChange={(e) => setTagsDraft(e.target.value)}
           disabled={pending}
@@ -192,14 +229,14 @@ export function UploadForm() {
           htmlFor="gallery-file"
           className={cn(gallerySerif(), "text-base")}
         >
-          Photos & clips
+          {videoAvailable ? "Photos & clips" : "Photos"}
         </Label>
         <input
           ref={fileInputRef}
           id="gallery-file"
           name="file"
           type="file"
-          accept="image/*,video/*"
+          accept={videoAvailable ? "image/*,video/*" : "image/*"}
           required={selectedFiles.length === 0}
           multiple
           disabled={pending}
@@ -258,7 +295,9 @@ export function UploadForm() {
             >
               {selectedFiles.length > 0
                 ? "Click to replace, or hang them with Upload selected."
-                : "Click to browse — images, HEIC, and short clips welcome."}
+                : videoAvailable
+                  ? "Click to browse — images, HEIC, and short clips welcome."
+                  : "Click to browse — images and HEIC welcome."}
             </span>
           </div>
         </label>
@@ -346,7 +385,7 @@ export function UploadForm() {
           in your browser. Gallery storage cap is 30 MB per file after
           compression. HEIC/HEIF from iPhone are accepted.
         </p>
-        {selectedFiles.length > 1 && trimmedName ? (
+        {selectedFiles.length > 1 && trimmedName && sequencesAvailable ? (
           <div className="rounded-xl border border-border/60 bg-muted/30 px-3 py-2">
             <p
               className={cn(
@@ -420,7 +459,11 @@ export function UploadForm() {
         ) : null}
       </div>
       {status.kind === "working" ? (
-        <div className="flex flex-col gap-2 rounded-xl border border-zinc-900/12 bg-zinc-900/[0.04] px-4 py-3">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex flex-col gap-2 rounded-xl border border-zinc-900/12 bg-zinc-900/[0.04] px-4 py-3"
+        >
           {status.batch ? (
             <p
               className={cn(
@@ -447,7 +490,7 @@ export function UploadForm() {
             onClick={cancelUpload}
             className={cn(gallerySans(), "self-start")}
           >
-            Cancel upload
+            {describeCancelUploadLabel()}
           </Button>
         </div>
       ) : null}
@@ -455,13 +498,15 @@ export function UploadForm() {
         type="submit"
         size="lg"
         disabled={pending || status.kind === "working"}
+        aria-busy={pending || status.kind === "working" || undefined}
         className={cn(gallerySans(), "h-12 rounded-full")}
       >
         {pending || status.kind === "working"
-          ? "Developing…"
-          : selectedFiles.length > 1
-            ? `Hang sequence (${selectedFiles.length})`
-            : "Hang on the wall"}
+          ? describeDevelopingLabel()
+          : describeHangUploadLabel({
+              fileCount: selectedFiles.length,
+              sequencesAvailable,
+            })}
       </Button>
     </form>
   )

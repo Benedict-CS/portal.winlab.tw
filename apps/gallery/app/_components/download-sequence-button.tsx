@@ -11,6 +11,16 @@ import {
   buildSequenceZipFilename,
   type SequenceZipSource,
 } from "@/lib/gallery/zip-names"
+import {
+  describeZipBusyLabel,
+  describeZipPreparingProgress,
+} from "@/lib/gallery/zip-progress"
+import { describeSequenceZipSaved } from "@/lib/gallery/sequence-zip-result"
+import {
+  describeCouldNotBuildZip,
+  describeDownloadStoryLabel,
+} from "@/lib/gallery/download-labels"
+import { describeErrorMessage } from "@/lib/gallery/error-message"
 
 type DownloadSequenceButtonProps = {
   items: SequenceZipSource[]
@@ -33,31 +43,39 @@ export function DownloadSequenceButton({
 }: DownloadSequenceButtonProps) {
   const [busy, setBusy] = useState(false)
   const shotCount = items.length
-  const buttonLabel =
-    label ??
-    (shotCount > 1 ? `Download story (${shotCount})` : "Download story")
+  const buttonLabel = label ?? describeDownloadStoryLabel(shotCount)
 
   const runDownload = async () => {
     if (busy || disabled || shotCount < 2) return
     setBusy(true)
-    const toastId = toast.loading(`Preparing story… 0/${shotCount}`)
+    const toastId = toast.loading(
+      describeZipPreparingProgress({
+        completed: 0,
+        total: shotCount,
+        noun: "story",
+      })
+    )
     try {
       const result = await downloadSequenceZip(items, {
         zipName: coverName ? buildSequenceZipFilename(coverName) : undefined,
         onProgress: ({ completed, total }) => {
-          toast.loading(`Preparing story… ${completed}/${total}`, {
-            id: toastId,
-          })
+          toast.loading(
+            describeZipPreparingProgress({
+              completed,
+              total,
+              noun: "story",
+            }),
+            {
+              id: toastId,
+            }
+          )
         },
       })
-      toast.success(
-        `Saved ${result.count} shot${result.count === 1 ? "" : "s"} as ZIP`,
-        { id: toastId }
-      )
+      toast.success(describeSequenceZipSaved(result.count), { id: toastId })
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Could not build the ZIP"
-      toast.error(message, { id: toastId })
+      toast.error(describeErrorMessage(error, describeCouldNotBuildZip()), {
+        id: toastId,
+      })
     } finally {
       setBusy(false)
     }
@@ -70,7 +88,7 @@ export function DownloadSequenceButton({
         onClick={() => void runDownload()}
         disabled={busy || disabled || shotCount < 2}
         aria-label={buttonLabel}
-        aria-busy={busy}
+        aria-busy={busy || undefined}
         className={cn(
           "inline-flex h-11 w-11 items-center justify-center rounded-full",
           "bg-white/85 text-foreground shadow-lg backdrop-blur-sm",
@@ -90,14 +108,14 @@ export function DownloadSequenceButton({
         type="button"
         onClick={() => void runDownload()}
         disabled={busy || disabled || shotCount < 2}
-        aria-busy={busy}
+        aria-busy={busy || undefined}
         className={cn(
           "text-[11px] text-muted-foreground/80 underline-offset-2",
           "hover:text-foreground hover:underline disabled:opacity-50",
           className
         )}
       >
-        {busy ? "Preparing ZIP…" : buttonLabel}
+        {busy ? describeZipBusyLabel() : buttonLabel}
       </button>
     )
   }
@@ -107,14 +125,14 @@ export function DownloadSequenceButton({
       type="button"
       onClick={() => void runDownload()}
       disabled={busy || disabled || shotCount < 2}
-      aria-busy={busy}
+      aria-busy={busy || undefined}
       className={cn(
         "inline-flex items-center gap-1.5 disabled:opacity-50",
         className
       )}
     >
       <IconFileZip className="size-3.5" aria-hidden />
-      {busy ? "Preparing ZIP…" : buttonLabel}
+      {busy ? describeZipBusyLabel() : buttonLabel}
     </button>
   )
 }

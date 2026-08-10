@@ -1,5 +1,7 @@
+"use client"
+
+import { useState } from "react"
 import Image from "next/image"
-import Link from "next/link"
 
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -15,10 +17,19 @@ import { getGalleryThumbUrl } from "@/lib/gallery/url"
 export function MemoriesPhotoCard({
   photo,
   currentYear,
+  onOpen,
+  onFocusPhoto,
+  focused = false,
+  buttonRef,
 }: {
   photo: GalleryMemoryPhoto
   currentYear: number
+  onOpen: () => void
+  onFocusPhoto?: () => void
+  focused?: boolean
+  buttonRef?: (node: HTMLButtonElement | null) => void
 }) {
+  const [thumbFailed, setThumbFailed] = useState(false)
   const frame = getPolaroidFrame(photo.id)
   const tape = getPolaroidTape(photo.id)
   const thumbPath =
@@ -33,9 +44,15 @@ export function MemoriesPhotoCard({
         frame.maxWidthClass
       )}
     >
-      <Link
-        href={`/?photo=${encodeURIComponent(photo.id)}`}
-        className="block focus-visible:ring-2 focus-visible:ring-zinc-900/30 focus-visible:outline-none"
+      <button
+        type="button"
+        ref={buttonRef}
+        onClick={onOpen}
+        onFocus={onFocusPhoto}
+        className={cn(
+          "block w-full text-left focus-visible:ring-2 focus-visible:ring-zinc-900/30 focus-visible:outline-none",
+          focused && "ring-2 ring-zinc-900/30"
+        )}
       >
         <div
           className={cn(
@@ -65,31 +82,56 @@ export function MemoriesPhotoCard({
               frame.aspectClass
             )}
           >
-            <Image
-              src={getGalleryThumbUrl(thumbPath)}
-              alt={photo.name}
-              fill
-              className="object-cover"
-              sizes="(max-width: 640px) 70vw, 240px"
-              unoptimized
-            />
-            {photo.media_type === "video" ? (
-              <div
-                aria-hidden
-                className="absolute inset-0 flex items-center justify-center bg-gradient-to-t from-black/25 via-transparent to-transparent"
-              >
-                <div className="flex size-10 items-center justify-center rounded-full bg-white/85 text-foreground shadow">
-                  <svg
-                    width="16"
-                    height="16"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                  >
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </div>
+            {thumbFailed ? (
+              <div className="flex h-full min-h-[8rem] flex-col items-center justify-center gap-2 px-3 text-center">
+                <Image
+                  src="/icons/mark.png"
+                  alt=""
+                  width={36}
+                  height={36}
+                  className="size-9 object-contain opacity-40 grayscale"
+                  draggable={false}
+                  unoptimized
+                />
+                <span
+                  className={cn(
+                    gallerySans(),
+                    "text-[11px] tracking-wide text-zinc-500/90"
+                  )}
+                >
+                  Preview unavailable
+                </span>
               </div>
-            ) : null}
+            ) : (
+              <>
+                <Image
+                  src={getGalleryThumbUrl(thumbPath)}
+                  alt={photo.name}
+                  fill
+                  className="object-cover"
+                  sizes="(max-width: 640px) 70vw, 240px"
+                  unoptimized
+                  onError={() => setThumbFailed(true)}
+                />
+                {photo.media_type === "video" ? (
+                  <div
+                    aria-hidden
+                    className="absolute inset-0 flex items-center justify-center bg-gradient-to-t from-black/25 via-transparent to-transparent"
+                  >
+                    <div className="flex size-10 items-center justify-center rounded-full bg-white/85 text-foreground shadow">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
 
           <div className="absolute inset-x-3 bottom-2.5 space-y-0.5">
@@ -115,7 +157,7 @@ export function MemoriesPhotoCard({
             </p>
           </div>
         </div>
-      </Link>
+      </button>
     </article>
   )
 }

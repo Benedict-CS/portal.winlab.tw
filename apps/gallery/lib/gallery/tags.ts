@@ -1,3 +1,5 @@
+import type { SupabaseClient } from "@supabase/supabase-js"
+
 export const GALLERY_TAG_NAME_MAX = 40
 export const GALLERY_TAGS_PER_IMAGE_MAX = 10
 
@@ -28,13 +30,22 @@ export function isGalleryTagsUnavailable(
     code === "PGRST205" ||
     code === "PGRST202" ||
     code === "42P01" ||
-    /gallery_image_tags|gallery_tags|gallery_list_popular_tags|gallery_wall_cover_ids_for_tag/i.test(
+    /gallery_image_tags|gallery_tags|gallery_list_popular_tags|gallery_wall_cover_ids_for_tag|gallery_wall_cover_ids_for_query|gallery_admin_rename_tag|gallery_admin_merge_tags/i.test(
       message
     ) ||
     /schema cache/i.test(message) ||
     /does not exist/i.test(message) ||
     /could not find/i.test(message)
   )
+}
+
+/** True when gallery_tags is queryable (migration applied). */
+export async function isGalleryTagsReady(
+  supabase: SupabaseClient
+): Promise<boolean> {
+  const { error } = await supabase.from("gallery_tags").select("id").limit(1)
+  if (!error) return true
+  return !isGalleryTagsUnavailable(error)
 }
 
 /**

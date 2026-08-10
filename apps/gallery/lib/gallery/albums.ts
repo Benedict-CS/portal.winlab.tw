@@ -1,3 +1,5 @@
+import type { SupabaseClient } from "@supabase/supabase-js"
+
 export const GALLERY_ALBUM_TITLE_MAX = 80
 export const GALLERY_ALBUM_SLUG_MAX = 80
 export const GALLERY_ALBUM_DESCRIPTION_MAX = 500
@@ -29,6 +31,7 @@ export type GalleryAlbumPhoto = {
   created_at: string
   position: number
   added_at: string
+  is_favorited?: boolean
 }
 
 export type GalleryAlbumDetail = {
@@ -80,10 +83,8 @@ export function normalizeGalleryAlbumDescription(
   return text
 }
 
-/** Assign contiguous positions 0..n-1 for a reorder payload. */
-export function normalizeAlbumPositions(
-  imageIds: string[]
-): { image_id: string; position: number }[] {
+/** Dedupe + cap image ids for bulk album membership mutations. */
+export function normalizeGalleryAlbumImageIds(imageIds: string[]): string[] {
   const seen = new Set<string>()
   const ordered: string[] = []
   for (const id of imageIds) {
@@ -93,5 +94,91 @@ export function normalizeAlbumPositions(
     ordered.push(trimmed)
     if (ordered.length >= GALLERY_ALBUM_PHOTOS_MAX) break
   }
-  return ordered.map((image_id, position) => ({ image_id, position }))
+  return ordered
+}
+
+/** Assign contiguous positions 0..n-1 for a reorder payload. */
+export function normalizeAlbumPositions(
+  imageIds: string[]
+): { image_id: string; position: number }[] {
+  return normalizeGalleryAlbumImageIds(imageIds).map((image_id, position) => ({
+    image_id,
+    position,
+  }))
+}
+
+/**
+ * Migration / PostgREST schema-cache miss for album RPCs — fail quietly so the
+ * wall still loads (and actions can soft-fall back to direct table writes).
+ */
+export function isGalleryAlbumsUnavailable(
+  error: {
+    code?: string
+    message?: string
+  } | null
+): boolean {
+  if (!error) return false
+  const code = error.code ?? ""
+  const message = error.message ?? ""
+  if (code === "PGRST205" || code === "PGRST202" || code === "42P01") {
+    return true
+  }
+  if (
+    /gallery_wall_cover_ids_for_album|gallery_album_add_images|gallery_album_remove_images|gallery_album_reorder_images|gallery_list_albums|gallery_album_photos/i.test(
+      message
+    )
+  ) {
+    return true
+  }
+  if (
+    /gallery_albums|gallery_album_images|gallery_album_photos/i.test(message) &&
+    (/schema cache/i.test(message) ||
+      /does not exist/i.test(message) ||
+      /could not find/i.test(message) ||
+      /PGRST/i.test(message))
+  ) {
+    return true
+  }
+  return false
+}
+
+/** True when gallery_albums is queryable (migration applied). */
+export async function isGalleryAlbumsReady(
+  supabase: SupabaseClient
+): Promise<boolean> {
+  const { error } = await supabase.from("gallery_albums").select("id").limit(1)
+  if (!error) return true
+  return !isGalleryAlbumsUnavailable(error)
+}
+
+/** After bulk remove, keep cover pointing at a remaining photo (or null). */
+export function nextAlbumCoverAfterRemove(
+  coverImageId: string | null | undefined,
+  remainingImageIds: string[],
+  removedIds: string[]
+): string | null {
+  const cover = coverImageId ?? null
+  if (cover == null) return null
+  if (!removedIds.includes(cover)) return cover
+  return remainingImageIds[0] ?? null
+}
+
+/** Case-insensitive match across title, slug, description, and owner. */
+export function albumMatchesQuery(
+  album: {
+    title: string
+    slug: string
+    description: string | null
+    owner_name: string
+  },
+  query: string
+): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+  return (
+    album.title.toLowerCase().includes(needle) ||
+    album.slug.includes(needle) ||
+    (album.description?.toLowerCase().includes(needle) ?? false) ||
+    album.owner_name.toLowerCase().includes(needle)
+  )
 }

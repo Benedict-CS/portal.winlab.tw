@@ -1,18 +1,27 @@
 import Link from "next/link"
 
-import { cn } from "@workspace/ui/lib/utils"
-
-import { MemoriesYearSections } from "@/app/memories/_components/memories-year-sections"
+import { MemoriesDayNavigator } from "@/app/memories/_components/memories-day-navigator"
+import { MemoriesDayView } from "@/app/memories/_components/memories-day-view"
 import { GalleryPageHero } from "@/app/_components/gallery-page-hero"
-import { galleryPanelClass, gallerySans } from "@/components/gallery-chrome"
+import { GalleryEmptyState } from "@/components/gallery-chrome"
 import { GalleryThemedShell } from "@/components/gallery-shell"
 import { loadGalleryMemoriesOnThisDay } from "@/lib/gallery/load-memories"
 import {
   formatMemoriesDayLabel,
   groupMemoriesByYear,
+  isMemoriesViewingToday,
   resolveMemoriesCalendarDay,
 } from "@/lib/gallery/memories"
+import {
+  describeBackToTheWallLabel,
+  describeMemoriesEmptyTrayDescription,
+  describeMemoriesEmptyTrayTitle,
+  describeMemoriesNotReadyDescription,
+  describeMemoriesNotReadyTitle,
+} from "@/lib/gallery/empty-state-labels"
+import { flattenMemoryGroupsForSlideshow } from "@/lib/gallery/slideshow"
 import { createClient } from "@/lib/supabase/server"
+import { loadFavoritedImageIds } from "@/lib/gallery/favorites"
 import { getCurrentUser } from "@/lib/user"
 
 export const dynamic = "force-dynamic"
@@ -33,14 +42,28 @@ export default async function MemoriesPage({
     day: params.day,
   })
   const label = formatMemoriesDayLabel(day.month, day.day)
+  const viewingToday = isMemoriesViewingToday(day)
 
   const supabase = await createClient()
   const user = await getCurrentUser()
-  const photos = await loadGalleryMemoriesOnThisDay(supabase, {
+  const memoriesResult = await loadGalleryMemoriesOnThisDay(supabase, {
     month: day.month,
     day: day.day,
   })
+  const photos = memoriesResult.photos
+  const memoriesAvailable = memoriesResult.available
+  if (user && photos.length > 0) {
+    const favoritedIds = await loadFavoritedImageIds(
+      supabase,
+      user.id,
+      photos.map((photo) => photo.id)
+    )
+    for (const photo of photos) {
+      photo.is_favorited = favoritedIds.has(photo.id)
+    }
+  }
   const groups = groupMemoriesByYear(photos)
+  const slideshowPhotos = flattenMemoryGroupsForSlideshow(groups)
 
   return (
     <GalleryThemedShell
@@ -49,41 +72,67 @@ export default async function MemoriesPage({
       containerClassName="max-w-5xl"
     >
       <div className="flex flex-col gap-10 sm:gap-12">
-        <GalleryPageHero
-          title="Memories"
-          lead={
-            <>
-              On this day — {label}. Prior-year shots from the lab paper wall,
-              matched by capture time when the camera wrote it down.
-            </>
-          }
-        />
+        <div className="space-y-5">
+          <GalleryPageHero
+            title="Memories"
+            lead={
+              <>
+                {viewingToday ? "On this day" : "Looking back"} — {label}.
+                Prior-year shots from the lab paper wall, matched by capture
+                time when the camera wrote it down.
+              </>
+            }
+          />
+          <MemoriesDayNavigator day={day} />
+        </div>
 
-        {groups.length === 0 ? (
-          <section className={cn(galleryPanelClass(), "space-y-3")}>
-            <p
-              className={cn(
-                gallerySans(),
-                "text-[10px] tracking-[0.22em] text-muted-foreground uppercase"
-              )}
-            >
-              Empty tray
-            </p>
-            <p className={cn(gallerySans(), "text-sm text-muted-foreground")}>
-              Nothing from a past {label} yet. Hang a polaroid today, and next
-              year it will show up here.
-            </p>
-            <p className={cn(gallerySans(), "text-sm")}>
+        {!memoriesAvailable ? (
+          <GalleryEmptyState
+            title={describeMemoriesNotReadyTitle()}
+            description={describeMemoriesNotReadyDescription()}
+            action={
               <Link
                 href="/"
                 className="underline decoration-zinc-400/80 underline-offset-4 hover:decoration-zinc-700"
               >
-                Back to the wall
+                {describeBackToTheWallLabel()}
               </Link>
-            </p>
-          </section>
+            }
+          />
+        ) : groups.length === 0 ? (
+          <GalleryEmptyState
+            title={describeMemoriesEmptyTrayTitle()}
+            description={describeMemoriesEmptyTrayDescription(label)}
+            action={
+              <p className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-sm">
+                <Link
+                  href="/"
+                  className="underline decoration-zinc-400/80 underline-offset-4 hover:decoration-zinc-700"
+                >
+                  {describeBackToTheWallLabel()}
+                </Link>
+                {user ? (
+                  <Link
+                    href="/upload"
+                    className="underline decoration-zinc-400/80 underline-offset-4 hover:decoration-zinc-700"
+                  >
+                    Upload a polaroid
+                  </Link>
+                ) : null}
+              </p>
+            }
+          />
         ) : (
-          <MemoriesYearSections groups={groups} currentYear={day.year} />
+          <MemoriesDayView
+            groups={groups}
+            currentYear={day.year}
+            slideshowPhotos={slideshowPhotos}
+            slideshowTitle={`Memories · ${label}`}
+            signedIn={Boolean(user)}
+            viewerId={user?.id ?? null}
+            viewerName={user?.name ?? "You"}
+            isAdmin={Boolean(user?.isAdmin)}
+          />
         )}
       </div>
     </GalleryThemedShell>
